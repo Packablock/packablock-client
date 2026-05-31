@@ -1,15 +1,22 @@
 # packablock-client
 
-To install dependencies:
+A Bun + TypeScript CLI for managing cryptographically secured parallel package history chains.
+
+## Installation
 
 ```bash
 bun install
 ```
 
-To run:
+## CLI Usage
 
 ```bash
-bun run index.ts
-```
+# Initialize a new package log from a lockfile
+bun start init packablock.yaml -l bun.lockb
 
-This project was created using `bun init` in bun v1.3.12. [Bun](https://bun.com) is a fast all-in-one JavaScript runtime.
+# Verify the integrity of the log chain
+bun start verify packablock.yaml
+
+# Push the verified chain to the API server
+bun start push packablock.yaml --server http://localhost:3030
+```
