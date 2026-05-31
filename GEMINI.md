@@ -4,45 +4,34 @@ This workspace orchestrates a zero-trust package attestation log. To prevent cre
 
 ---
 
-## 🔑 Agent Identity & Git Commit Signing
+## 🔑 Agent Identity, Commit Signing & Push Authentication
 
-When creating Git commits or performing Git history modifications, agents must **never** use the human developer's global VM configurations (`user.name "Aaron Bronow"`). 
+When performing Git operations, commits, remote pushes, or GitHub CLI (`gh`) API requests, agents must **never** use the human developer's global VM configurations (`user.name "Aaron Bronow"`) or default token session state.
 
-Instead, each agent must resolve its unique cryptographic identity and override the configuration dynamically for every Git transaction:
+Instead, agents must use the dedicated **Workspace Repo Wrapper Scripts** located in the workspace root directory. These wrappers dynamically load the correct environment profiles, authorize API credentials, and cryptographically sign commit trees automatically:
 
-1. **Load Environment**: Source the role-specific `.env.<role>` file in the root workspace (e.g. `/home/aaron/dev/packablock/.env.agy` or `/home/aaron/dev/packablock/.env.contributor-1`).
-2. **Resolve Identity**: The keys are standardized in every file (`GITHUB_NAME`, `GITHUB_EMAIL`, `GITHUB_SIGNING_KEY`).
-3. **Dynamic Overrides**: Prefix your Git commit commands with your resolved environment parameters:
+### 🚀 Available Wrappers
+- **Agy lead agent wrapper**: `./git-agy`
+- **Contributor-1 agent wrapper**: `./git-contributor-1`
 
+### 🔧 Usage Examples
+
+#### 1. Creating Git Commits
+Instead of using `git commit`, run the commit command directly through your wrapper:
 ```bash
-git \
-  -c user.name="$GITHUB_NAME" \
-  -c user.email="$GITHUB_EMAIL" \
-  -c user.signingkey="$GITHUB_SIGNING_KEY" \
-  -c gpg.format=ssh \
-  -c commit.gpgsign=true \
-  commit -m "Your commit message"
+./git-agy commit -m "Your commit message"
 ```
 
----
-
-## 🌐 GitHub API & Push Authentication
-
-The human owner (`aaronbronow`) maintains global terminal session authorization. Do **not** overwrite or log out of the global `gh auth login` state.
-
-To perform remote Git pushes or execute GitHub CLI (`gh`) API requests on behalf of a specific agent:
-1. **Load Environment**: Source the role-specific `.env.<role>` file in the root workspace.
-2. **Resolve Token**: Standardized as `GITHUB_TOKEN` in every agent's profile.
-3. **Push Authentication**: Prefix all Git pushes or GitHub API calls with your token to force basic authentication, preventing credential caching conflicts with the human owner:
-
-### 🚀 Git Push Overrides
+#### 2. Git Remote Pushing
+Instead of prefixing tokens manually, execute your pushes through the wrapper:
 ```bash
-GITHUB_TOKEN=$GITHUB_TOKEN git push origin <branch>
+./git-agy push origin <branch>
 ```
 
-### 🔍 GitHub API Overrides
+#### 3. GitHub API & CLI Overrides
+Because the wrapper automatically exports the correct token session keys inside its process environment, any Git or `gh` API command run through the wrapper is instantly authenticated:
 ```bash
-GH_TOKEN=$GITHUB_TOKEN gh api <endpoint>
+./git-agy gh api <endpoint>
 ```
 
 ---
