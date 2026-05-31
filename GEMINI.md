@@ -56,4 +56,6 @@ GH_TOKEN=$GITHUB_TOKEN gh api <endpoint>
 * **Windmill CLI (`wmill`)**: Installed and available at `/home/aaron/.nvm/versions/node/v24.14.1/bin/wmill`. Always run from inside the `packablock-client/windmill/` directory.
 * **Lockfile Metadata & Linting**: Run `wmill generate-metadata` inside `packablock-client/windmill/` to rebuild lockfiles/schemas, and `wmill lint` to validate flows.
 * **Pushes to Windmill**: Deploy templates with `bun start wmill-setup` or `wmill sync push` inside the `windmill/` directory.
+* **Active Workload (WIP)**: Run `./wip.sh` inside the workspace root directory to instantly view all "In Progress" organization tasks with minimal token consumption.
+
 
