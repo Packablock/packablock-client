@@ -1,0 +1,55 @@
+summary: Verify and Report Package Log
+description: Pulls the latest package attestation log, cryptographically verifies its chain, and prints an attestation report.
+schema:
+  $schema: "https://json-schema.org/draft/2020-12/schema"
+  type: object
+  properties:
+    owner:
+      type: string
+      description: The GitHub owner of the repository
+    repo:
+      type: string
+      description: The GitHub repository name
+    api_server:
+      type: string
+      default: "http://localhost:3030"
+      description: The Packablock API server URL
+    repo_token:
+      type: string
+      description: Optional repository registration token
+  required:
+    - owner
+    - repo
+value:
+  modules:
+    - id: verify_chain
+      value:
+        type: script
+        path: f/packablock/verify_chain
+        input_transforms:
+          owner:
+            type: javascript
+            expr: flow_input.owner
+          repo:
+            type: javascript
+            expr: flow_input.repo
+          api_server:
+            type: javascript
+            expr: flow_input.api_server
+          repo_token:
+            type: javascript
+            expr: flow_input.repo_token
+    - id: generate_report
+      value:
+        type: script
+        path: f/packablock/generate_report
+        input_transforms:
+          report:
+            type: javascript
+            expr: steps.verify_chain.result
+          owner:
+            type: javascript
+            expr: flow_input.owner
+          repo:
+            type: javascript
+            expr: flow_input.repo

@@ -1,0 +1,31 @@
+summary: ''
+description: ''
+lock: '!inline f/packablock/verify_chain.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties:
+    api_server:
+      type: string
+      description: ''
+      default: http://localhost:3030
+      originalType: string
+    owner:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    repo:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    repo_token:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+  required:
+    - owner
+    - repo

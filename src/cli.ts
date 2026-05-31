@@ -12,7 +12,7 @@ import {
 } from './chain.js';
 import { computeDiff, formatDiffConsole } from './diff.js';
 import { parseLockfiles } from './lockfile.js';
-import { executeDeviceLogin, pushChain, pullChain, registerRepo, loadConfig, saveConfig } from './api.js';
+import { executeDeviceLogin, pushChain, pullChain, registerRepo, loadConfig, saveConfig, setupWindmillWorkspace } from './api.js';
 
 const colors = {
   reset: '\x1b[0m',
@@ -435,6 +435,29 @@ export function createCli(): Command {
         console.log(`${colors.bold}IMPORTANT:${colors.reset} Save this registration token in your repository secrets as ${colors.bold}PACKABLOCK_REPO_TOKEN${colors.reset}!`);
       } catch (err: any) {
         console.error(`\n❌ ${colors.red}${colors.bold}Registration failed:${colors.reset} ${err.message}`);
+        process.exit(1);
+      }
+    });
+
+  program
+    .command('wmill-setup')
+    .option('-w, --workspace <workspace>', 'Optional target Windmill workspace to push the DAG flow to')
+    .option('-t, --token <token>', 'Optional Windmill API token for remote push')
+    .option('-b, --base-url <url>', 'Optional Windmill base API URL')
+    .description('Automatically configure and push the Packablock verification DAG flow to your Windmill workspace')
+    .action(async (options) => {
+      console.log(logo);
+      console.log(`🌀 ${colors.bold}Setting up Windmill DAG flows...${colors.reset}\n`);
+      
+      try {
+        await setupWindmillWorkspace({
+          workspace: options.workspace,
+          token: options.token,
+          baseUrl: options.baseUrl
+        });
+        console.log(`\n✨ ${colors.green}${colors.bold}SUCCESS:${colors.reset} Packablock Windmill DAG flows are fully configured and deployed!`);
+      } catch (err: any) {
+        console.error(`\n❌ ${colors.red}${colors.bold}Windmill setup failed:${colors.reset} ${err.message}`);
         process.exit(1);
       }
     });

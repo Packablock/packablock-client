@@ -1,0 +1,26 @@
+summary: ''
+description: ''
+lock: '!inline f/packablock/generate_report.script.lock'
+kind: script
+schema:
+  $schema: https://json-schema.org/draft/2020-12/schema
+  type: object
+  properties:
+    owner:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    repo:
+      type: string
+      description: ''
+      default: null
+      originalType: string
+    report:
+      type: ''
+      description: ''
+      default: null
+  required:
+    - report
+    - owner
+    - repo

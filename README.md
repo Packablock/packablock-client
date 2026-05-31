@@ -19,4 +19,8 @@ bun start verify packablock.yaml
 
 # Push the verified chain to the API server
 bun start push packablock.yaml --server http://localhost:3030
+
+# Automatically set up and deploy the Packablock verification DAG flows to Windmill
+bun start wmill-setup --workspace <your-windmill-workspace> --token <your-api-token>
 ```
+

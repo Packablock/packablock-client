@@ -2,6 +2,7 @@ import { writeFileSync, readFileSync, mkdirSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { execSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 const CONFIG_DIR = path.join(os.homedir(), '.config', 'packablock');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
@@ -308,5 +309,59 @@ export async function registerRepo(owner: string, repo: string, options: Registe
   }
 
   return response.json();
+}
+
+export interface WindmillSetupOptions {
+  workspace?: string;
+  token?: string;
+  baseUrl?: string;
+}
+
+/**
+ * Automates configuring and pushing the Packablock verification DAG flow to the contributor's Windmill workspace.
+ */
+export async function setupWindmillWorkspace(options: WindmillSetupOptions): Promise<void> {
+  // Check if wmill CLI is installed
+  try {
+    execSync('wmill --version', { stdio: 'ignore' });
+  } catch (err) {
+    throw new Error(
+      'Windmill CLI ("wmill") is not installed or not found in PATH.\n' +
+      'Please install it by running:\n' +
+      '  npm install -g wmill\n' +
+      'Or refer to Deno-based installations if preferred.'
+    );
+  }
+
+  // Resolve windmill directory relative to this script file
+  const currentDir = path.dirname(fileURLToPath(import.meta.url));
+  const windmillDir = path.resolve(currentDir, '..', 'windmill');
+
+  if (!existsSync(windmillDir)) {
+    throw new Error(`Windmill workspace directory not found at: ${windmillDir}`);
+  }
+
+  console.log(`📂 Windmill template directory: ${windmillDir}`);
+
+  // Build the push command
+  let cmd = 'wmill sync push --auto-metadata --yes';
+
+  if (options.workspace) {
+    cmd += ` --workspace ${options.workspace}`;
+  }
+  if (options.token) {
+    cmd += ` --token ${options.token}`;
+  }
+  if (options.baseUrl) {
+    cmd += ` --base-url ${options.baseUrl}`;
+  }
+
+  console.log(`🚀 Executing: ${cmd}`);
+
+  try {
+    execSync(cmd, { cwd: windmillDir, stdio: 'inherit' });
+  } catch (err: any) {
+    throw new Error(`Failed to push windmill configurations: ${err.message}`);
+  }
 }
 

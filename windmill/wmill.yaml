@@ -1,0 +1,6 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/windmill-labs/windmill/main/cli/wmill.schema.json
+defaultTs: bun
+includes:
+  - "f/**"
+excludes: []
+
