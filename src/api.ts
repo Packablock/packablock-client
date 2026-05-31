@@ -1,6 +1,7 @@
 import { writeFileSync, readFileSync, mkdirSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { execSync } from 'node:child_process';
 
 const CONFIG_DIR = path.join(os.homedir(), '.config', 'packablock');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
@@ -131,6 +132,20 @@ export interface PushOptions {
   githubOidcToken?: string;
 }
 
+function getGitRemoteRepo(): string | null {
+  try {
+    const url = execSync('git remote get-url origin', { encoding: 'utf8' }).trim();
+    // Parse HTTPS: https://github.com/owner/repo.git or SSH: git@github.com:owner/repo.git
+    const match = url.match(/github\.com[/:]([^/]+)\/([^.]+)/);
+    if (match && match[1] && match[2]) {
+      return `${match[1]}/${match[2]}`;
+    }
+  } catch (e) {
+    // Failed
+  }
+  return null;
+}
+
 /**
  * Pushes the cryptographically verified chain to the metadata-free API server.
  */
@@ -159,6 +174,11 @@ export async function pushChain(chainContent: string, options: PushOptions): Pro
     const config = loadConfig();
     if (config.github_token) {
       headers['Authorization'] = `Bearer ${config.github_token}`;
+      
+      const targetRepo = getGitRemoteRepo();
+      if (targetRepo) {
+        headers['X-Target-Repo'] = targetRepo;
+      }
     } else {
       throw new Error(
         'Authentication required to push to log registry.\n' +
