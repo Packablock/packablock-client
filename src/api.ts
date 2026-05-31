@@ -212,3 +212,101 @@ export async function pushChain(chainContent: string, options: PushOptions): Pro
 
   return response.json();
 }
+
+export interface PullOptions {
+  apiServer: string;
+  repoToken?: string;
+  targetRepo?: string;
+}
+
+export interface RegisterOptions {
+  apiServer: string;
+}
+
+/**
+ * Pulls the package chain from the metadata-free API server.
+ */
+export async function pullChain(options: PullOptions): Promise<string> {
+  const url = `${options.apiServer.replace(/\/$/, '')}/api/v1/log/pull`;
+  
+  const headers: Record<string, string> = {
+    'Accept': 'text/yaml'
+  };
+
+  // Determine authorization/lookup mechanism:
+  const repoToken = options.repoToken || process.env.PACKABLOCK_REPO_TOKEN;
+  if (repoToken) {
+    headers['X-Repo-Token'] = repoToken;
+  }
+
+  // Fallback to developer OAuth Token + target repo header
+  if (!repoToken) {
+    const config = loadConfig();
+    if (config.github_token) {
+      headers['Authorization'] = `Bearer ${config.github_token}`;
+    }
+    
+    const targetRepo = options.targetRepo || getGitRemoteRepo();
+    if (targetRepo) {
+      headers['X-Target-Repo'] = targetRepo;
+    }
+  }
+
+  console.log(`Pulling package chain from API server at: ${url}...`);
+
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: headers
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    let parsedError: any;
+    try {
+      parsedError = JSON.parse(errorText);
+    } catch {
+      // Non-JSON error
+    }
+    throw new Error(
+      `Pull failed (${response.status} ${response.statusText}): ` +
+      (parsedError?.message || parsedError?.error || errorText)
+    );
+  }
+
+  return response.text();
+}
+
+/**
+ * Registers a repository on the API server.
+ */
+export async function registerRepo(owner: string, repo: string, options: RegisterOptions): Promise<any> {
+  const url = `${options.apiServer.replace(/\/$/, '')}/api/v1/repos/register`;
+  
+  console.log(`Registering repository ${owner}/${repo} on API server at: ${url}...`);
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json'
+    },
+    body: JSON.stringify({ owner, repo })
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    let parsedError: any;
+    try {
+      parsedError = JSON.parse(errorText);
+    } catch {
+      // Non-JSON error
+    }
+    throw new Error(
+      `Registration failed (${response.status} ${response.statusText}): ` +
+      (parsedError?.message || parsedError?.error || errorText)
+    );
+  }
+
+  return response.json();
+}
+

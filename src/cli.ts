@@ -1,6 +1,7 @@
 import { Command } from 'commander';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import YAML from 'yaml';
 import { 
   initChain, 
   appendBlock, 
@@ -11,7 +12,7 @@ import {
 } from './chain.js';
 import { computeDiff, formatDiffConsole } from './diff.js';
 import { parseLockfiles } from './lockfile.js';
-import { executeDeviceLogin, pushChain, loadConfig, saveConfig } from './api.js';
+import { executeDeviceLogin, pushChain, pullChain, registerRepo, loadConfig, saveConfig } from './api.js';
 
 const colors = {
   reset: '\x1b[0m',
@@ -134,6 +135,9 @@ export function createCli(): Command {
     .argument('<file>', 'Path to the log file to verify')
     .option('--diff', 'Show a line-by-line diff of tampered data compared to previous block if possible')
     .option('-c, --compare-with <known-good-file>', 'Cross-file comparison with a known-good backup')
+    .option('-s, --server <url>', 'Target API Server URL for anchoring check (cross-reference)')
+    .option('-t, --token <registration-token>', 'Optional repository registration token')
+    .option('-r, --repo <owner/repo>', 'Optional target repository (owner/repo)')
     .description('Cryptographically verify the entire package history integrity')
     .action(async (file, options) => {
       const resolvedPath = path.resolve(file);
@@ -143,7 +147,51 @@ export function createCli(): Command {
         const report = await verifyChain(resolvedPath);
         
         if (report.valid) {
-          console.log(`\n✅ ${colors.green}${colors.bold}VERIFICATION PASSED:${colors.reset} The log history is cryptographically intact and untampered.`);
+          if (options.server) {
+            console.log(`🌐 ${colors.cyan}Cross-referencing local chain with registry at ${options.server}...${colors.reset}`);
+            try {
+              const remoteChainStr = await pullChain({
+                apiServer: options.server,
+                repoToken: options.token,
+                targetRepo: options.repo
+              });
+
+              const localStatus = await getChainStatus(resolvedPath);
+              const remoteDocs = splitRawDocuments(remoteChainStr);
+              if (remoteDocs.length === 0 || remoteDocs.length % 2 !== 0) {
+                throw new Error("Remote log chain on server is empty or malformed.");
+              }
+              const lastRemoteMetaDocStr = remoteDocs[remoteDocs.length - 1];
+              const parsedRemote = YAML.parse(lastRemoteMetaDocStr);
+              const remoteLastBlock = parsedRemote?.['$yaml-chain-meta'];
+              
+              if (!remoteLastBlock) {
+                throw new Error("Failed to parse remote log chain metadata.");
+              }
+              
+              if (localStatus.blockCount !== remoteDocs.length / 2) {
+                throw new Error(`Chain length mismatch. Local: ${localStatus.blockCount} blocks, Remote: ${remoteDocs.length / 2} blocks.`);
+              }
+              
+              if (localStatus.lastBlock?.meta_hash !== remoteLastBlock.meta_hash) {
+                throw new Error(`Cryptographic mismatch with anchored remote log! Local latest hash: ${localStatus.lastBlock?.meta_hash}, Remote latest hash: ${remoteLastBlock.meta_hash}. Potential history rewrite detected!`);
+              }
+
+              console.log(`\n✅ ${colors.green}${colors.bold}VERIFICATION PASSED:${colors.reset} The log history is cryptographically intact and anchored securely to the registry.`);
+            } catch (err: any) {
+              console.error(`\n❌ ${colors.red}${colors.bold}ANCHORING CHECK FAILED:${colors.reset} ${err.message}`);
+              process.exit(1);
+            }
+          } else {
+            console.log(`\n✅ ${colors.green}${colors.bold}VERIFICATION PASSED:${colors.reset} The log history is cryptographically intact and untampered.`);
+            
+            // Print Prominent Warning Box (LEVEL_2_P2P_DIRECT Mode)
+            console.warn(`\n${colors.yellow}│ ⚠️  SECURITY WARNING: DEGRADED TRUST MODE${colors.reset}`);
+            console.warn(`${colors.yellow}│ This verification was executed in pure Peer-to-Peer mode without an${colors.reset}`);
+            console.warn(`${colors.yellow}│ external log anchor.${colors.reset}`);
+            console.warn(`${colors.yellow}│ While source bytes match what the committer signed, this runner cannot${colors.reset}`);
+            console.warn(`${colors.yellow}│ detect localized history rewrites or split-timeline attacks.${colors.reset}\n`);
+          }
           process.exit(0);
         } else {
           console.log(`\n❌ ${colors.red}${colors.bold}VERIFICATION FAILED! TAMPER DETECTED!${colors.reset}`);
@@ -296,7 +344,7 @@ export function createCli(): Command {
   program
     .command('push')
     .argument('<file>', 'Path to the log file to push')
-    .option('-s, --server <url>', 'Target API Server URL', 'http://localhost:3000')
+    .option('-s, --server <url>', 'Target API Server URL', process.env.PACKABLOCK_API_SERVER || 'http://localhost:3030')
     .option('-t, --token <registration-token>', 'Optional repository registration token')
     .description('Push the cryptographically verified package log to the API server')
     .action(async (file, options) => {
@@ -333,6 +381,60 @@ export function createCli(): Command {
         }
       } catch (err: any) {
         console.error(`\n❌ ${colors.red}${colors.bold}Push failed:${colors.reset} ${err.message}`);
+        process.exit(1);
+      }
+    });
+
+  program
+    .command('pull')
+    .argument('<file>', 'Path to write the pulled package log')
+    .option('-s, --server <url>', 'Target API Server URL', process.env.PACKABLOCK_API_SERVER || 'http://localhost:3030')
+    .option('-t, --token <registration-token>', 'Optional repository registration token')
+    .option('-r, --repo <owner/repo>', 'Optional target repository (owner/repo)')
+    .description('Pull the cryptographically verified package log from the API server')
+    .action(async (file, options) => {
+      const resolvedPath = path.resolve(file);
+      try {
+        const content = await pullChain({
+          apiServer: options.server,
+          repoToken: options.token,
+          targetRepo: options.repo
+        });
+
+        await fs.writeFile(resolvedPath, content, 'utf8');
+        console.log(`\n📥 ${colors.green}${colors.bold}SUCCESS:${colors.reset} Chain pulled and saved successfully to ${colors.bold}${file}${colors.reset}!`);
+      } catch (err: any) {
+        console.error(`\n❌ ${colors.red}${colors.bold}Pull failed:${colors.reset} ${err.message}`);
+        process.exit(1);
+      }
+    });
+
+  program
+    .command('register')
+    .argument('<owner/repo>', 'The GitHub owner/repository to register (e.g. Packablock/packablock-client)')
+    .option('-s, --server <url>', 'Target API Server URL', process.env.PACKABLOCK_API_SERVER || 'http://localhost:3030')
+    .description('Register a new repository on the API server to generate a registration token')
+    .action(async (ownerRepo, options) => {
+      const [owner, repo] = ownerRepo.split('/');
+      if (!owner || !repo) {
+        console.error(`\n❌ ${colors.red}${colors.bold}Error:${colors.reset} Repository must be in the format 'owner/repo' (e.g. Packablock/packablock-client)`);
+        process.exit(1);
+      }
+
+      try {
+        const result = await registerRepo(owner, repo, {
+          apiServer: options.server
+        });
+
+        console.log(`\n🎉 ${colors.green}${colors.bold}SUCCESS:${colors.reset} Repository registered successfully!`);
+        console.log(`${colors.gray}------------------------------------------------------------${colors.reset}`);
+        console.log(`${colors.bold}Owner:${colors.reset}              ${result.owner}`);
+        console.log(`${colors.bold}Repository:${colors.reset}         ${result.repo}`);
+        console.log(`${colors.bold}Registration Token:${colors.reset} ${colors.yellow}${result.registrationToken}${colors.reset}`);
+        console.log(`${colors.gray}------------------------------------------------------------${colors.reset}`);
+        console.log(`${colors.bold}IMPORTANT:${colors.reset} Save this registration token in your repository secrets as ${colors.bold}PACKABLOCK_REPO_TOKEN${colors.reset}!`);
+      } catch (err: any) {
+        console.error(`\n❌ ${colors.red}${colors.bold}Registration failed:${colors.reset} ${err.message}`);
         process.exit(1);
       }
     });
