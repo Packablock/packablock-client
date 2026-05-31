@@ -232,7 +232,7 @@ function verifySingleBlock(
     } else {
       return {
         valid: false,
-        reason: `Blockchain link broken at block ${i}: expected prev_meta_hash to be '${expectedPrevHash}', but found '${meta.prev_meta_hash}'.`,
+        reason: `Chain link broken at block ${i}: expected prev_meta_hash to be '${expectedPrevHash}', but found '${meta.prev_meta_hash}'.`,
         blockIndex: i,
         tamperedComponent: 'chain',
         expected: expectedPrevHash,
@@ -363,7 +363,7 @@ export async function verifyChain(filepath: string): Promise<VerificationReport>
 }
 
 /**
- * Gets details of the blockchain.
+ * Gets details of the chain.
  * @param filepath Path to chain file
  */
 export async function getChainStatus(filepath: string): Promise<ChainStatus> {

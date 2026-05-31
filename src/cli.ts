@@ -39,7 +39,7 @@ export function createCli(): Command {
 
   program
     .name('packablock')
-    .description('Cryptographically secured parallel package ledger client CLI')
+    .description('Cryptographically secured parallel package log client CLI')
     .version('1.0.0');
 
   // helper to get data string from options
@@ -73,11 +73,11 @@ export function createCli(): Command {
 
   program
     .command('init')
-    .argument('<file>', 'Path to the yaml-chain ledger file to create')
+    .argument('<file>', 'Path to the yaml-chain log file to create')
     .option('-d, --data <yaml-string>', 'Initial document data payload')
     .option('-f, --file <file-path>', 'Path to file containing initial data')
     .option('-l, --lockfile <lockfiles...>', 'One or more package-lock.json, bun.lockb, or yarn.lock files to parse')
-    .description('Initialize a new package ledger with a genesis block')
+    .description('Initialize a new package log with a genesis block')
     .action(async (file, options) => {
       console.log(logo);
       const data = await resolveData(options) || 'message: "Genesis block initialized."\n';
@@ -85,7 +85,7 @@ export function createCli(): Command {
       
       try {
         const meta = await initChain(resolvedPath, data);
-        console.log(`\n✨ ${colors.green}${colors.bold}Success:${colors.reset} Initialized Packablock ledger at ${colors.bold}${file}${colors.reset}`);
+        console.log(`\n✨ ${colors.green}${colors.bold}Success:${colors.reset} Initialized Packablock log at ${colors.bold}${file}${colors.reset}`);
         console.log(`${colors.gray}------------------------------------------------------------${colors.reset}`);
         console.log(`${colors.bold}Block Index:${colors.reset} 0 (Genesis)`);
         console.log(`${colors.bold}Timestamp:${colors.reset}   ${meta.timestamp}`);
@@ -100,11 +100,11 @@ export function createCli(): Command {
 
   program
     .command('append')
-    .argument('<file>', 'Path to the ledger file')
+    .argument('<file>', 'Path to the log file')
     .option('-d, --data <yaml-string>', 'Document data payload to append')
     .option('-f, --file <file-path>', 'Path to file containing data to append')
     .option('-l, --lockfile <lockfiles...>', 'One or more lockfiles to parse and append packages')
-    .description('Append a new dependency block to the package ledger')
+    .description('Append a new dependency block to the package log')
     .action(async (file, options) => {
       const data = await resolveData(options);
       if (!data) {
@@ -131,19 +131,19 @@ export function createCli(): Command {
 
   program
     .command('verify')
-    .argument('<file>', 'Path to the ledger file to verify')
+    .argument('<file>', 'Path to the log file to verify')
     .option('--diff', 'Show a line-by-line diff of tampered data compared to previous block if possible')
     .option('-c, --compare-with <known-good-file>', 'Cross-file comparison with a known-good backup')
-    .description('Cryptographically verify the entire package ledger integrity')
+    .description('Cryptographically verify the entire package history integrity')
     .action(async (file, options) => {
       const resolvedPath = path.resolve(file);
-      console.log(`🔍 ${colors.bold}Verifying ledger integrity for:${colors.reset} ${file} ...`);
+      console.log(`🔍 ${colors.bold}Verifying chain integrity for:${colors.reset} ${file} ...`);
       
       try {
         const report = await verifyChain(resolvedPath);
         
         if (report.valid) {
-          console.log(`\n✅ ${colors.green}${colors.bold}VERIFICATION PASSED:${colors.reset} The ledger is cryptographically intact and untampered.`);
+          console.log(`\n✅ ${colors.green}${colors.bold}VERIFICATION PASSED:${colors.reset} The log history is cryptographically intact and untampered.`);
           process.exit(0);
         } else {
           console.log(`\n❌ ${colors.red}${colors.bold}VERIFICATION FAILED! TAMPER DETECTED!${colors.reset}`);
@@ -205,15 +205,15 @@ export function createCli(): Command {
 
   program
     .command('status')
-    .argument('<file>', 'Path to the ledger file')
-    .description('Get the current status and statistics of the ledger')
+    .argument('<file>', 'Path to the log file')
+    .description('Get the current status and statistics of the log')
     .action(async (file) => {
       const resolvedPath = path.resolve(file);
       try {
         const status = await getChainStatus(resolvedPath);
-        console.log(`\n📊 ${colors.bold}Ledger Health Status:${colors.reset} ${file}`);
+        console.log(`\n📊 ${colors.bold}Log Health Status:${colors.reset} ${file}`);
         console.log(`${colors.gray}------------------------------------------------------------${colors.reset}`);
-        console.log(`${colors.bold}Ledger Health:${colors.reset}  ${status.isHealthy ? `${colors.green}Healthy${colors.reset}` : `${colors.red}Malformed${colors.reset}`}`);
+        console.log(`${colors.bold}Log Health:${colors.reset}     ${status.isHealthy ? `${colors.green}Healthy${colors.reset}` : `${colors.red}Malformed${colors.reset}`}`);
         console.log(`${colors.bold}Block Count:${colors.reset}    ${status.blockCount}`);
         
         if (status.lastBlock) {
@@ -230,7 +230,7 @@ export function createCli(): Command {
 
   program
     .command('show')
-    .argument('<file>', 'Path to the ledger file')
+    .argument('<file>', 'Path to the log file')
     .argument('<index>', 'Block index to view')
     .description('View the payload and metadata of a specific block')
     .action(async (file, indexStr) => {
@@ -264,7 +264,7 @@ export function createCli(): Command {
 
   program
     .command('notes')
-    .argument('<file>', 'Path to the ledger file')
+    .argument('<file>', 'Path to the log file')
     .option('-o, --owner <org-name>', 'Organization/owner name', 'packablock')
     .description('Generate structured release notes and package log in Markdown')
     .action(async (file, options) => {
@@ -295,24 +295,24 @@ export function createCli(): Command {
 
   program
     .command('push')
-    .argument('<file>', 'Path to the ledger file to push')
+    .argument('<file>', 'Path to the log file to push')
     .option('-s, --server <url>', 'Target API Server URL', 'http://localhost:3000')
     .option('-t, --token <registration-token>', 'Optional repository registration token')
-    .description('Push the cryptographically verified ledger to the API server')
+    .description('Push the cryptographically verified package log to the API server')
     .action(async (file, options) => {
       const resolvedPath = path.resolve(file);
       
       // Step 1: Verify locally first!
-      console.log(`🔍 Checking ledger validity before push...`);
+      console.log(`🔍 Checking chain validity before push...`);
       try {
         const report = await verifyChain(resolvedPath);
         if (!report.valid) {
-          console.error(`\n❌ ${colors.red}${colors.bold}Validation error:${colors.reset} Cannot push a tampered ledger!`);
+          console.error(`\n❌ ${colors.red}${colors.bold}Validation error:${colors.reset} Cannot push a tampered chain history!`);
           console.error(`${colors.red}Reason: ${report.reason}${colors.reset}`);
           process.exit(1);
         }
       } catch (err: any) {
-        console.error(`\n❌ ${colors.red}${colors.bold}Failed to verify ledger:${colors.reset} ${err.message}`);
+        console.error(`\n❌ ${colors.red}${colors.bold}Failed to verify chain:${colors.reset} ${err.message}`);
         process.exit(1);
       }
 
@@ -326,8 +326,8 @@ export function createCli(): Command {
           repoToken: options.token
         });
 
-        console.log(`\n🚀 ${colors.green}${colors.bold}SUCCESS:${colors.reset} Ledger synced successfully!`);
-        console.log(`${colors.bold}Server Response:${colors.reset} ${result.message || 'Ledger written'}`);
+        console.log(`\n🚀 ${colors.green}${colors.bold}SUCCESS:${colors.reset} Chain synced successfully!`);
+        console.log(`${colors.bold}Server Response:${colors.reset} ${result.message || 'Log written'}`);
         if (result.blockCount) {
           console.log(`${colors.bold}Server Block Count:${colors.reset} ${result.blockCount}`);
         }

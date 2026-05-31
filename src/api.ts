@@ -132,10 +132,10 @@ export interface PushOptions {
 }
 
 /**
- * Pushes the cryptographically verified blockchain to the metadata-free API server.
+ * Pushes the cryptographically verified chain to the metadata-free API server.
  */
 export async function pushChain(chainContent: string, options: PushOptions): Promise<any> {
-  const url = `${options.apiServer.replace(/\/$/, '')}/api/v1/ledger/push`;
+  const url = `${options.apiServer.replace(/\/$/, '')}/api/v1/log/push`;
   
   const headers: Record<string, string> = {
     'Content-Type': 'text/yaml'
@@ -161,14 +161,14 @@ export async function pushChain(chainContent: string, options: PushOptions): Pro
       headers['Authorization'] = `Bearer ${config.github_token}`;
     } else {
       throw new Error(
-        'Authentication required to push to ledger.\n' +
+        'Authentication required to push to log registry.\n' +
         'Please run: packablock-client login\n' +
         'Or set PACKABLOCK_REPO_TOKEN in your environment.'
       );
     }
   }
 
-  console.log(`Pushing ledger chain to API server at: ${url}...`);
+  console.log(`Pushing package chain to API server at: ${url}...`);
 
   const response = await fetch(url, {
     method: 'POST',
