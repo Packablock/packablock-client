@@ -1,0 +1,341 @@
+import { Command } from 'commander';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { 
+  initChain, 
+  appendBlock, 
+  verifyChain, 
+  getChainStatus, 
+  splitRawDocuments, 
+  generateReleaseNotes 
+} from './chain.js';
+import { computeDiff, formatDiffConsole } from './diff.js';
+import { parseLockfiles } from './lockfile.js';
+import { executeDeviceLogin, pushChain, loadConfig, saveConfig } from './api.js';
+
+const colors = {
+  reset: '\x1b[0m',
+  bold: '\x1b[1m',
+  red: '\x1b[31m',
+  green: '\x1b[32m',
+  yellow: '\x1b[33m',
+  blue: '\x1b[34m',
+  magenta: '\x1b[35m',
+  cyan: '\x1b[36m',
+  gray: '\x1b[90m'
+};
+
+const logo = `
+${colors.bold}${colors.cyan}  _____             _         ${colors.magenta}____  _            _      
+${colors.bold}${colors.cyan} |  __ \\           | |       ${colors.magenta}|  _ \\| |          | |     
+${colors.bold}${colors.cyan} | |__) |___  ___  | | __    ${colors.magenta}| |_) | | ___   ___| | __  
+${colors.bold}${colors.cyan} |  ___// _ \\/ __| | |/ /    ${colors.magenta}|  _ <| |/ _ \\ / __| |/ /  
+${colors.bold}${colors.cyan} | |   | (_| (__  |   <     ${colors.magenta}| |_) | | (_) | (__|   <   
+${colors.bold}${colors.cyan} |_|    \\___|\\___| |_|\\_\\    ${colors.magenta}|____/|_|\\___/ \\___|_|\\_\\  
+${colors.reset}`;
+
+export function createCli(): Command {
+  const program = new Command();
+
+  program
+    .name('packablock')
+    .description('Cryptographically secured parallel package ledger client CLI')
+    .version('1.0.0');
+
+  // helper to get data string from options
+  async function resolveData(options: any): Promise<string | null> {
+    if (options.lockfile && options.lockfile.length > 0) {
+      console.log(`📦 ${colors.bold}Parsing lockfiles:${colors.reset} ${options.lockfile.join(', ')}`);
+      try {
+        const parsed = parseLockfiles(options.lockfile);
+        // Serialize parsed lockfile packages back as clean YAML
+        const yamlData = `source: "${parsed.source}"\nevent: "dependencies_baseline"\npackages:\n` + 
+          Object.entries(parsed.packages).map(([name, ver]) => `  ${name}: "${ver}"`).join('\n') + '\n';
+        return yamlData;
+      } catch (err: any) {
+        console.error(`${colors.red}${colors.bold}Error parsing lockfile: ${colors.reset}${err.message}`);
+        process.exit(1);
+      }
+    }
+    if (options.file) {
+      try {
+        return await fs.readFile(options.file, 'utf8');
+      } catch (err: any) {
+        console.error(`${colors.red}${colors.bold}Error: ${colors.reset}Could not read file '${options.file}': ${err.message}`);
+        process.exit(1);
+      }
+    }
+    if (options.data) {
+      return options.data;
+    }
+    return null;
+  }
+
+  program
+    .command('init')
+    .argument('<file>', 'Path to the yaml-chain ledger file to create')
+    .option('-d, --data <yaml-string>', 'Initial document data payload')
+    .option('-f, --file <file-path>', 'Path to file containing initial data')
+    .option('-l, --lockfile <lockfiles...>', 'One or more package-lock.json, bun.lockb, or yarn.lock files to parse')
+    .description('Initialize a new package ledger with a genesis block')
+    .action(async (file, options) => {
+      console.log(logo);
+      const data = await resolveData(options) || 'message: "Genesis block initialized."\n';
+      const resolvedPath = path.resolve(file);
+      
+      try {
+        const meta = await initChain(resolvedPath, data);
+        console.log(`\n✨ ${colors.green}${colors.bold}Success:${colors.reset} Initialized Packablock ledger at ${colors.bold}${file}${colors.reset}`);
+        console.log(`${colors.gray}------------------------------------------------------------${colors.reset}`);
+        console.log(`${colors.bold}Block Index:${colors.reset} 0 (Genesis)`);
+        console.log(`${colors.bold}Timestamp:${colors.reset}   ${meta.timestamp}`);
+        console.log(`${colors.bold}Data Hash:${colors.reset}   ${colors.yellow}${meta.data_hash}${colors.reset}`);
+        console.log(`${colors.bold}Block Hash:${colors.reset}  ${colors.magenta}${meta.meta_hash}${colors.reset}`);
+        console.log(`${colors.gray}------------------------------------------------------------${colors.reset}`);
+      } catch (err: any) {
+        console.error(`\n❌ ${colors.red}${colors.bold}Error during initialization:${colors.reset} ${err.message}`);
+        process.exit(1);
+      }
+    });
+
+  program
+    .command('append')
+    .argument('<file>', 'Path to the ledger file')
+    .option('-d, --data <yaml-string>', 'Document data payload to append')
+    .option('-f, --file <file-path>', 'Path to file containing data to append')
+    .option('-l, --lockfile <lockfiles...>', 'One or more lockfiles to parse and append packages')
+    .description('Append a new dependency block to the package ledger')
+    .action(async (file, options) => {
+      const data = await resolveData(options);
+      if (!data) {
+        console.error(`${colors.red}${colors.bold}Error: ${colors.reset}You must provide data (-d, -f, or -l option).`);
+        process.exit(1);
+      }
+      
+      const resolvedPath = path.resolve(file);
+      try {
+        const meta = await appendBlock(resolvedPath, data);
+        console.log(`\n🔗 ${colors.green}${colors.bold}Block appended successfully!${colors.reset}`);
+        console.log(`${colors.gray}------------------------------------------------------------${colors.reset}`);
+        console.log(`${colors.bold}Block Index:${colors.reset} ${meta.block_index}`);
+        console.log(`${colors.bold}Timestamp:${colors.reset}   ${meta.timestamp}`);
+        console.log(`${colors.bold}Data Hash:${colors.reset}   ${colors.yellow}${meta.data_hash}${colors.reset}`);
+        console.log(`${colors.bold}Prev Hash:${colors.reset}   ${colors.gray}${meta.prev_meta_hash}${colors.reset}`);
+        console.log(`${colors.bold}Block Hash:${colors.reset}  ${colors.magenta}${meta.meta_hash}${colors.reset}`);
+        console.log(`${colors.gray}------------------------------------------------------------${colors.reset}`);
+      } catch (err: any) {
+        console.error(`\n❌ ${colors.red}${colors.bold}Error appending block:${colors.reset} ${err.message}`);
+        process.exit(1);
+      }
+    });
+
+  program
+    .command('verify')
+    .argument('<file>', 'Path to the ledger file to verify')
+    .option('--diff', 'Show a line-by-line diff of tampered data compared to previous block if possible')
+    .option('-c, --compare-with <known-good-file>', 'Cross-file comparison with a known-good backup')
+    .description('Cryptographically verify the entire package ledger integrity')
+    .action(async (file, options) => {
+      const resolvedPath = path.resolve(file);
+      console.log(`🔍 ${colors.bold}Verifying ledger integrity for:${colors.reset} ${file} ...`);
+      
+      try {
+        const report = await verifyChain(resolvedPath);
+        
+        if (report.valid) {
+          console.log(`\n✅ ${colors.green}${colors.bold}VERIFICATION PASSED:${colors.reset} The ledger is cryptographically intact and untampered.`);
+          process.exit(0);
+        } else {
+          console.log(`\n❌ ${colors.red}${colors.bold}VERIFICATION FAILED! TAMPER DETECTED!${colors.reset}`);
+          console.log(`${colors.gray}------------------------------------------------------------${colors.reset}`);
+          console.log(`${colors.bold}Reason:${colors.reset}        ${colors.red}${report.reason}${colors.reset}`);
+          console.log(`${colors.bold}Failed Block:${colors.reset}  Block ${report.blockIndex !== undefined ? report.blockIndex : 'N/A'}`);
+          console.log(`${colors.bold}Component:${colors.reset}     ${colors.yellow}${report.tamperedComponent || 'N/A'}${colors.reset}`);
+          
+          if (report.expected !== undefined || report.actual !== undefined) {
+            console.log(`${colors.bold}Expected:${colors.reset}      ${colors.green}${report.expected}${colors.reset}`);
+            console.log(`${colors.bold}Actual:${colors.reset}        ${colors.red}${report.actual}${colors.reset}`);
+          }
+          console.log(`${colors.gray}------------------------------------------------------------${colors.reset}`);
+          
+          if (options.compareWith) {
+            const comparePath = path.resolve(options.compareWith);
+            try {
+              const compareContent = await fs.readFile(comparePath, 'utf8');
+              const compareDocs = splitRawDocuments(compareContent);
+              
+              if (report.tamperedComponent === 'data') {
+                const knownGoodDoc = compareDocs[2 * report.blockIndex!];
+                const tamperedDoc = report.dataText;
+                
+                if (knownGoodDoc !== undefined && tamperedDoc !== undefined) {
+                  console.log(`\n🌱 ${colors.bold}Diffing original block (from known-good file) ➡️ tampered block:${colors.reset}`);
+                  console.log(`${colors.gray}------------------------------------------------------------${colors.reset}`);
+                  const diff = computeDiff(knownGoodDoc, tamperedDoc);
+                  console.log(formatDiffConsole(diff));
+                  console.log(`${colors.gray}------------------------------------------------------------${colors.reset}`);
+                } else {
+                  console.log(`\n${colors.yellow}Warning: Could not locate Block ${report.blockIndex} in known-good file to diff against.${colors.reset}`);
+                }
+              }
+            } catch (err: any) {
+              console.error(`\n❌ ${colors.red}Error reading known-good comparison file:${colors.reset} ${err.message}`);
+            }
+          } else if (options.diff && report.tamperedComponent === 'data' && report.blockIndex! > 0) {
+            console.log(`\n${colors.bold}Diffing Block ${report.blockIndex} with previous Block ${report.blockIndex! - 1}:${colors.reset}`);
+            
+            const content = await fs.readFile(resolvedPath, 'utf8');
+            const docs = splitRawDocuments(content);
+            const prevBlockData = docs[2 * (report.blockIndex! - 1)];
+            const currentBlockData = report.dataText;
+            
+            if (prevBlockData !== undefined && currentBlockData !== undefined) {
+              const diff = computeDiff(prevBlockData, currentBlockData);
+              console.log(formatDiffConsole(diff));
+            }
+          }
+          
+          process.exit(1);
+        }
+      } catch (err: any) {
+        console.error(`\n❌ ${colors.red}${colors.bold}Error performing verification:${colors.reset} ${err.message}`);
+        process.exit(1);
+      }
+    });
+
+  program
+    .command('status')
+    .argument('<file>', 'Path to the ledger file')
+    .description('Get the current status and statistics of the ledger')
+    .action(async (file) => {
+      const resolvedPath = path.resolve(file);
+      try {
+        const status = await getChainStatus(resolvedPath);
+        console.log(`\n📊 ${colors.bold}Ledger Health Status:${colors.reset} ${file}`);
+        console.log(`${colors.gray}------------------------------------------------------------${colors.reset}`);
+        console.log(`${colors.bold}Ledger Health:${colors.reset}  ${status.isHealthy ? `${colors.green}Healthy${colors.reset}` : `${colors.red}Malformed${colors.reset}`}`);
+        console.log(`${colors.bold}Block Count:${colors.reset}    ${status.blockCount}`);
+        
+        if (status.lastBlock) {
+          console.log(`${colors.bold}Last Index:${colors.reset}     ${status.lastBlock.block_index}`);
+          console.log(`${colors.bold}Last Hash:${colors.reset}      ${colors.magenta}${status.lastBlock.meta_hash}${colors.reset}`);
+          console.log(`${colors.bold}Last Timestamp:${colors.reset} ${status.lastBlock.timestamp}`);
+        }
+        console.log(`${colors.gray}------------------------------------------------------------${colors.reset}`);
+      } catch (err: any) {
+        console.error(`\n❌ ${colors.red}Error fetching status:${colors.reset} ${err.message}`);
+        process.exit(1);
+      }
+    });
+
+  program
+    .command('show')
+    .argument('<file>', 'Path to the ledger file')
+    .argument('<index>', 'Block index to view')
+    .description('View the payload and metadata of a specific block')
+    .action(async (file, indexStr) => {
+      const index = parseInt(indexStr, 10);
+      const resolvedPath = path.resolve(file);
+      try {
+        const content = await fs.readFile(resolvedPath, 'utf8');
+        const docs = splitRawDocuments(content);
+        
+        const dataDoc = docs[2 * index];
+        const metaDoc = docs[2 * index + 1];
+        
+        if (dataDoc === undefined || metaDoc === undefined) {
+          console.error(`${colors.red}Error: Block index ${index} out of bounds.${colors.reset}`);
+          process.exit(1);
+        }
+        
+        console.log(`\n📦 ${colors.bold}Block ${index} details:${colors.reset}`);
+        console.log(`${colors.gray}============================================================${colors.reset}`);
+        console.log(`${colors.bold}METADATA BLOCK:${colors.reset}`);
+        console.log(metaDoc.trim());
+        console.log(`${colors.gray}------------------------------------------------------------${colors.reset}`);
+        console.log(`${colors.bold}DATA PAYLOAD:${colors.reset}`);
+        console.log(dataDoc.trim());
+        console.log(`${colors.gray}============================================================${colors.reset}`);
+      } catch (err: any) {
+        console.error(`${colors.red}Error displaying block details:${colors.reset} ${err.message}`);
+        process.exit(1);
+      }
+    });
+
+  program
+    .command('notes')
+    .argument('<file>', 'Path to the ledger file')
+    .option('-o, --owner <org-name>', 'Organization/owner name', 'packablock')
+    .description('Generate structured release notes and package log in Markdown')
+    .action(async (file, options) => {
+      const resolvedPath = path.resolve(file);
+      try {
+        const markdown = await generateReleaseNotes(resolvedPath, options.owner);
+        console.log(markdown);
+      } catch (err: any) {
+        console.error(`${colors.red}Error generating release notes:${colors.reset} ${err.message}`);
+        process.exit(1);
+      }
+    });
+
+  program
+    .command('login')
+    .description('Authenticate dynamically with GitHub using Device Flow (OAuth)')
+    .action(async () => {
+      console.log(logo);
+      try {
+        const token = await executeDeviceLogin();
+        console.log(`\n🎉 ${colors.green}${colors.bold}SUCCESS:${colors.reset} Authenticated successfully to GitHub!`);
+        console.log(`Personal access token secured in configuration.`);
+      } catch (err: any) {
+        console.error(`\n❌ ${colors.red}${colors.bold}Authentication failed:${colors.reset} ${err.message}`);
+        process.exit(1);
+      }
+    });
+
+  program
+    .command('push')
+    .argument('<file>', 'Path to the ledger file to push')
+    .option('-s, --server <url>', 'Target API Server URL', 'http://localhost:3000')
+    .option('-t, --token <registration-token>', 'Optional repository registration token')
+    .description('Push the cryptographically verified ledger to the API server')
+    .action(async (file, options) => {
+      const resolvedPath = path.resolve(file);
+      
+      // Step 1: Verify locally first!
+      console.log(`🔍 Checking ledger validity before push...`);
+      try {
+        const report = await verifyChain(resolvedPath);
+        if (!report.valid) {
+          console.error(`\n❌ ${colors.red}${colors.bold}Validation error:${colors.reset} Cannot push a tampered ledger!`);
+          console.error(`${colors.red}Reason: ${report.reason}${colors.reset}`);
+          process.exit(1);
+        }
+      } catch (err: any) {
+        console.error(`\n❌ ${colors.red}${colors.bold}Failed to verify ledger:${colors.reset} ${err.message}`);
+        process.exit(1);
+      }
+
+      // Step 2: Read complete content
+      try {
+        const content = await fs.readFile(resolvedPath, 'utf8');
+        
+        // Step 3: Transmit
+        const result = await pushChain(content, {
+          apiServer: options.server,
+          repoToken: options.token
+        });
+
+        console.log(`\n🚀 ${colors.green}${colors.bold}SUCCESS:${colors.reset} Ledger synced successfully!`);
+        console.log(`${colors.bold}Server Response:${colors.reset} ${result.message || 'Ledger written'}`);
+        if (result.blockCount) {
+          console.log(`${colors.bold}Server Block Count:${colors.reset} ${result.blockCount}`);
+        }
+      } catch (err: any) {
+        console.error(`\n❌ ${colors.red}${colors.bold}Push failed:${colors.reset} ${err.message}`);
+        process.exit(1);
+      }
+    });
+
+  return program;
+}

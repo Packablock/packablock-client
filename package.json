@@ -1,0 +1,22 @@
+{
+  "name": "packablock-client",
+  "module": "index.ts",
+  "type": "module",
+  "bin": {
+    "packablock-client": "./index.ts"
+  },
+  "scripts": {
+    "start": "bun run index.ts"
+  },
+  "private": true,
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "commander": "^15.0.0",
+    "yaml": "^2.9.0"
+  }
+}

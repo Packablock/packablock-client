@@ -1,0 +1,19 @@
+source: "bun.lockb"
+event: "dependencies_baseline"
+packages:
+  @types/bun: "1.3.14"
+  @types/node: "25.9.1"
+  bun-types: "1.3.14"
+  commander: "15.0.0"
+  typescript: "5.9.3"
+  undici-types: "7.24.6"
+  yaml: "2.9.0"
+---
+$yaml-chain-meta:
+  version: 1.0.0
+  block_index: 0
+  timestamp: 2026-05-31T03:38:56.935Z
+  hashing_strategy: raw
+  data_hash: c826814ca69b9cc95a3f1292db26ed1bd7fa52f344b1716a13d229fd402e031d
+  prev_meta_hash: "0000000000000000000000000000000000000000000000000000000000000000"
+  meta_hash: 923d992eff066f8638c46a55be9433ce070d955393f970f71b419326e74eccfa

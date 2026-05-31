@@ -1,0 +1,194 @@
+import { writeFileSync, readFileSync, mkdirSync, existsSync } from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+
+const CONFIG_DIR = path.join(os.homedir(), '.config', 'packablock');
+const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
+
+// Default client ID for a standard GitHub OAuth / Device Flow application
+// (This can be overridden in the environment if they set PACKABLOCK_GITHUB_CLIENT_ID)
+const DEFAULT_CLIENT_ID = process.env.PACKABLOCK_GITHUB_CLIENT_ID || 'Iv1.packablock_placeholder_id';
+
+export interface AuthConfig {
+  github_token?: string;
+  api_server?: string;
+}
+
+export function loadConfig(): AuthConfig {
+  try {
+    if (existsSync(CONFIG_FILE)) {
+      const data = readFileSync(CONFIG_FILE, 'utf8');
+      return JSON.parse(data);
+    }
+  } catch (err) {
+    // Fail silently
+  }
+  return {};
+}
+
+export function saveConfig(config: AuthConfig): void {
+  try {
+    if (!existsSync(CONFIG_DIR)) {
+      mkdirSync(CONFIG_DIR, { recursive: true });
+    }
+    writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), 'utf8');
+  } catch (err: any) {
+    throw new Error(`Failed to save config file: ${err.message}`);
+  }
+}
+
+/**
+ * Executes the GitHub Device Flow Authentication.
+ */
+export async function executeDeviceLogin(clientId = DEFAULT_CLIENT_ID): Promise<string> {
+  console.log('Initiating GitHub authentication flow...');
+  
+  // Step 1: Request device and user codes
+  const response = await fetch('https://github.com/login/device/code', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json'
+    },
+    body: JSON.stringify({
+      client_id: clientId,
+      scope: 'repo read:org' // Scopes needed to read repository write permission and organization membership
+    })
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to contact GitHub authentication service: ${errorText}`);
+  }
+
+  const data: any = await response.json();
+  const { device_code, user_code, verification_uri, expires_in, interval } = data;
+
+  console.log('\n------------------------------------------------------------');
+  console.log(`1. Open this link in your browser: \x1b[1m\x1b[36m${verification_uri}\x1b[0m`);
+  console.log(`2. Enter this code:                \x1b[1m\x1b[32m${user_code}\x1b[0m`);
+  console.log('------------------------------------------------------------\n');
+  console.log('Waiting for authorization (press Ctrl+C to cancel)...');
+
+  // Step 2: Poll for the access token
+  const pollInterval = (interval || 5) * 1000;
+  const expiryTime = Date.now() + (expires_in || 900) * 1000;
+
+  while (Date.now() < expiryTime) {
+    await new Promise(resolve => setTimeout(resolve, pollInterval));
+
+    const pollResponse = await fetch('https://github.com/login/oauth/access_token', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      body: JSON.stringify({
+        client_id: clientId,
+        device_code: device_code,
+        grant_type: 'urn:ietf:params:oauth:grant-type:device_code'
+      })
+    });
+
+    if (!pollResponse.ok) {
+      continue;
+    }
+
+    const pollData: any = await pollResponse.json();
+
+    if (pollData.error) {
+      if (pollData.error === 'authorization_pending') {
+        // Continue polling
+        continue;
+      }
+      if (pollData.error === 'slow_down') {
+        // Wait longer
+        await new Promise(resolve => setTimeout(resolve, pollInterval));
+        continue;
+      }
+      throw new Error(`Authentication error from GitHub: ${pollData.error_description || pollData.error}`);
+    }
+
+    if (pollData.access_token) {
+      // Success!
+      const token = pollData.access_token;
+      
+      // Save token in config
+      const config = loadConfig();
+      config.github_token = token;
+      saveConfig(config);
+
+      return token;
+    }
+  }
+
+  throw new Error('Device authorization flow timed out.');
+}
+
+export interface PushOptions {
+  apiServer: string;
+  repoToken?: string;
+  githubOidcToken?: string;
+}
+
+/**
+ * Pushes the cryptographically verified blockchain to the metadata-free API server.
+ */
+export async function pushChain(chainContent: string, options: PushOptions): Promise<any> {
+  const url = `${options.apiServer.replace(/\/$/, '')}/api/v1/ledger/push`;
+  
+  const headers: Record<string, string> = {
+    'Content-Type': 'text/yaml'
+  };
+
+  // Determine authorization mechanism:
+  // 1. Repo secret registration token (either direct or environment-based)
+  const repoToken = options.repoToken || process.env.PACKABLOCK_REPO_TOKEN;
+  if (repoToken) {
+    headers['X-Repo-Token'] = repoToken;
+  }
+
+  // 2. GitHub OIDC Token (CI environment)
+  const oidcToken = options.githubOidcToken || process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
+  if (oidcToken) {
+    headers['X-GitHub-OIDC-Token'] = oidcToken;
+  }
+
+  // 3. Fallback to developer personal OAuth Token (loaded from CLI login config)
+  if (!repoToken && !oidcToken) {
+    const config = loadConfig();
+    if (config.github_token) {
+      headers['Authorization'] = `Bearer ${config.github_token}`;
+    } else {
+      throw new Error(
+        'Authentication required to push to ledger.\n' +
+        'Please run: packablock-client login\n' +
+        'Or set PACKABLOCK_REPO_TOKEN in your environment.'
+      );
+    }
+  }
+
+  console.log(`Pushing ledger chain to API server at: ${url}...`);
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: headers,
+    body: chainContent
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    let parsedError: any;
+    try {
+      parsedError = JSON.parse(errorText);
+    } catch {
+      // Non-JSON error
+    }
+    throw new Error(
+      `Push failed (${response.status} ${response.statusText}): ` +
+      (parsedError?.message || parsedError?.error || errorText)
+    );
+  }
+
+  return response.json();
+}
