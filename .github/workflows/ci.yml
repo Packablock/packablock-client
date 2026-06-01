@@ -1,0 +1,28 @@
+name: "CI: Code Hygiene & Test Gates"
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  hygiene-check:
+    name: "Typecheck, Lint, Format & Unit Tests"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+
+      - name: Install Dependencies
+        run: bun install
+
+      - name: Run CI Validation Gate
+        run: bun run check-all

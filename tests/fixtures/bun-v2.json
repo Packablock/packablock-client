@@ -1,23 +1,23 @@
 {
-  "lockfileVersion": 1,
-  "dependencies": {
-    "lodash": {
-      "version": "4.17.22",
-      "resolved": "https://npmjs.org",
-      "integrity": "sha512-v2kDEe57iecT9Re3Ew5294Md663914eIdX0q6is9BhOqmStepLQKm3c55Iec9KX+1j5kB+kbBGi7RPBhIm9OBQ=="
-    },
-    "zod": {
-      "version": "3.22.4",
-      "resolved": "https://npmjs.org",
-      "integrity": "sha512-iC+8Io04lddc+mVqQ9AZ7OQ2YKq7EYjcMZRqG52hqlnFdHkuld9vTLNJ35JEiMY2QAtdLEpYmCHQ/7VvXiC5Bw==",
-      "dependencies": {
-        "picomatch": "^2.3.1"
-      }
-    },
-    "commander": {
-      "version": "11.1.0",
-      "resolved": "https://npmjs.org",
-      "integrity": "sha512-y1W0TuVJXO2dUM16dQIyLwGIdTkS7U/KfIpOj4z8h2tc/G87A4F1D1l0w01hD1h78="
-    }
-  }
+	"lockfileVersion": 1,
+	"dependencies": {
+		"lodash": {
+			"version": "4.17.22",
+			"resolved": "https://npmjs.org",
+			"integrity": "sha512-v2kDEe57iecT9Re3Ew5294Md663914eIdX0q6is9BhOqmStepLQKm3c55Iec9KX+1j5kB+kbBGi7RPBhIm9OBQ=="
+		},
+		"zod": {
+			"version": "3.22.4",
+			"resolved": "https://npmjs.org",
+			"integrity": "sha512-iC+8Io04lddc+mVqQ9AZ7OQ2YKq7EYjcMZRqG52hqlnFdHkuld9vTLNJ35JEiMY2QAtdLEpYmCHQ/7VvXiC5Bw==",
+			"dependencies": {
+				"picomatch": "^2.3.1"
+			}
+		},
+		"commander": {
+			"version": "11.1.0",
+			"resolved": "https://npmjs.org",
+			"integrity": "sha512-y1W0TuVJXO2dUM16dQIyLwGIdTkS7U/KfIpOj4z8h2tc/G87A4F1D1l0w01hD1h78="
+		}
+	}
 }
