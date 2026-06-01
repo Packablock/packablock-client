@@ -31,7 +31,6 @@ jobs:
           # Your VM's secure Tailscale IP address
           PACKABLOCK_API_SERVER: http://100.108.40.3:3030
         run: |
-          cd packablock-client
           bun install
           
           echo "Checking for package log chain..."
