@@ -1059,7 +1059,7 @@ export function createCli(): Command {
 	program
 		.command("pack")
 		.argument("[dir]", "Path to the workspace directory to pack", ".")
-		.option("-o, --output <file>", "Output tarball path", "release.tar.gz")
+		.option("-o, --output <file>", "Output tarball path", "pack.tar.gz")
 		.option("-l, --log <file>", "Path to the chain log file", "packablock.yaml")
 		.option(
 			"-s, --secret <text>",
@@ -1070,12 +1070,12 @@ export function createCli(): Command {
 			"Path to the private key to sign the manifest with RSA-SHA256",
 		)
 		.description(
-			"Verify local chain integrity, sign a build manifest, and compile release tarballs containing the chain",
+			"Verify local chain integrity, sign a build manifest, and compile a metadata-only pack tarball containing the chain and manifest",
 		)
 		.action(async (dir, options) => {
 			try {
 				console.log(
-					`\n📦 ${colors.bold}Initiating Packablock secure release packager...${colors.reset}`,
+					`\n📦 ${colors.bold}Initiating Packablock secure metadata-only packager...${colors.reset}`,
 				);
 
 				const { packWorkspace } = await import("./pack.js");
@@ -1090,7 +1090,7 @@ export function createCli(): Command {
 				);
 
 				console.log(
-					`✅ ${colors.green}${colors.bold}Release tarball compiled successfully!${colors.reset}`,
+					`✅ ${colors.green}${colors.bold}Pack tarball compiled successfully!${colors.reset}`,
 				);
 				console.log(
 					`${colors.gray}------------------------------------------------------------${colors.reset}`,

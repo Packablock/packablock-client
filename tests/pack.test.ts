@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import fsSync from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
+import { execSync } from "node:child_process";
 import { initChain } from "../src/chain.js";
 import {
 	packWorkspace,
@@ -112,18 +113,31 @@ describe("Release Packaging Subcommand Tests", () => {
 		expect(manifest.authType).toBe("hmac-sha256");
 		expect(manifest.signerIdentities).toHaveLength(1);
 
-		// Assert pblk-manifest.json exists inside target workspace
+		// Assert pblk-manifest.json does NOT exist inside target workspace anymore (clutter-free)
 		const manifestJsonPath = path.join(tempDir, "pblk-manifest.json");
-		expect(fsSync.existsSync(manifestJsonPath)).toBe(true);
-
-		// Read manifest file and check it does NOT list every source file
-		const manifestContent = JSON.parse(
-			await fs.readFile(manifestJsonPath, "utf8"),
-		);
-		expect(manifestContent.files).toBeUndefined();
+		expect(fsSync.existsSync(manifestJsonPath)).toBe(false);
 
 		// Assert release.tar.gz was successfully compiled on disk
 		expect(fsSync.existsSync(tempTarball)).toBe(true);
+
+		// Verify we can extract pblk-manifest.json and packablock.yaml from the tarball
+		const extractDir = path.join(tempDir, "extract-test");
+		await fs.mkdir(extractDir, { recursive: true });
+		execSync(
+			`tar -xzf "${tempTarball}" -C "${extractDir}" pblk-manifest.json packablock.yaml`,
+		);
+		expect(fsSync.existsSync(path.join(extractDir, "pblk-manifest.json"))).toBe(
+			true,
+		);
+		expect(fsSync.existsSync(path.join(extractDir, "packablock.yaml"))).toBe(
+			true,
+		);
+
+		// Read manifest file from extracted location and check it does NOT list every source file
+		const manifestContent = JSON.parse(
+			await fs.readFile(path.join(extractDir, "pblk-manifest.json"), "utf8"),
+		);
+		expect(manifestContent.files).toBeUndefined();
 	});
 
 	it("should immediately abort and throw an error when packing a tampered chain log", async () => {

@@ -230,23 +230,37 @@ export async function packWorkspace(
 	const tempTarballDir = await fs.mkdtemp(path.join(os.tmpdir(), "pblk-pack-"));
 	const tempTarballPath = path.join(tempTarballDir, outputTarballName);
 
-	try {
-		let cmd = `tar -czf "${tempTarballPath}" -C "${resolvedDir}"`;
-		cmd += " --exclude=.git --exclude=node_modules";
-		cmd += " .";
+	let copiedLog = false;
+	const logBasename = path.basename(resolvedLog);
+	const logInDir = path.join(resolvedDir, logBasename);
 
+	try {
+		if (path.resolve(logInDir) !== resolvedLog) {
+			await fs.copyFile(resolvedLog, logInDir);
+			copiedLog = true;
+		}
+
+		const cmd = `tar -czf "${tempTarballPath}" -C "${resolvedDir}" "${logBasename}" pblk-manifest.json`;
 		execSync(cmd, { stdio: "pipe" });
 
 		// Move output to final destination
 		await fs.rename(tempTarballPath, resolvedTarball);
 	} catch (err: any) {
 		const stderr = err.stderr ? `: ${err.stderr.toString().trim()}` : "";
-		// Clean up manifest on failure
+		throw new Error(`Failed to compile release tarball${stderr}`);
+	} finally {
+		// Clean up manifest in resolvedDir
 		try {
 			await fs.unlink(manifestPath);
 		} catch (e) {}
-		throw new Error(`Failed to compile release tarball${stderr}`);
-	} finally {
+
+		// Clean up copied log if needed
+		if (copiedLog) {
+			try {
+				await fs.unlink(logInDir);
+			} catch (e) {}
+		}
+
 		// Clean up temp dir
 		try {
 			await fs.rm(tempTarballDir, { recursive: true, force: true });
@@ -276,7 +290,7 @@ export async function verifyPack(
 
 	try {
 		// 1. Extract pblk-manifest.json first to identify the block/ledger state
-		let cmd = `tar -xzf "${resolvedTarball}" -C "${tempDir}" ./pblk-manifest.json`;
+		let cmd = `tar -xzf "${resolvedTarball}" -C "${tempDir}" pblk-manifest.json`;
 		execSync(cmd, { stdio: "ignore" });
 
 		const manifestPath = path.join(tempDir, "pblk-manifest.json");
@@ -285,7 +299,7 @@ export async function verifyPack(
 
 		// 2. Extract the chain log packablock.yaml
 		const logName = "packablock.yaml";
-		let cmdLog = `tar -xzf "${resolvedTarball}" -C "${tempDir}" ./${logName}`;
+		let cmdLog = `tar -xzf "${resolvedTarball}" -C "${tempDir}" "${logName}"`;
 		execSync(cmdLog, { stdio: "ignore" });
 
 		const logPath = path.join(tempDir, logName);
