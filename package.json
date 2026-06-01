@@ -3,7 +3,7 @@
   "module": "index.ts",
   "type": "module",
   "bin": {
-    "packablock-client": "./index.ts"
+    "pblk": "./index.ts"
   },
   "scripts": {
     "start": "bun run index.ts",

@@ -50,7 +50,7 @@ export function createCli(): Command {
   const program = new Command();
 
   program
-    .name('packablock')
+    .name('pblk')
     .description('Cryptographically secured parallel package log client CLI')
     .version('1.0.0');
 
@@ -142,8 +142,8 @@ export function createCli(): Command {
     });
 
   program
-    .command('verify')
-    .argument('<file>', 'Path to the log file to verify')
+    .command('check')
+    .argument('[file]', 'Path to the log file to verify', 'packablock.yaml')
     .option('--diff', 'Show a line-by-line diff of tampered data compared to previous block if possible')
     .option('-c, --compare-with <known-good-file>', 'Cross-file comparison with a known-good backup')
     .option('-s, --server <url>', 'Target API Server URL for anchoring check (cross-reference)')
@@ -263,7 +263,7 @@ export function createCli(): Command {
     });
 
   program
-    .command('check')
+    .command('audit')
     .argument('[file]', 'Path to the local log file', 'packablock.yaml')
     .option('--visualize', 'Visualize package constraints and upstream drift using SemVer Candle charts')
     .option('-s, --server <url>', 'Target API Server URL', process.env.PACKABLOCK_API_SERVER || 'http://localhost:3030')
@@ -529,7 +529,7 @@ export function createCli(): Command {
 
   program
     .command('push')
-    .argument('<file>', 'Path to the log file to push')
+    .argument('[file]', 'Path to the log file to push', 'packablock.yaml')
     .option('-s, --server <url>', 'Target API Server URL', process.env.PACKABLOCK_API_SERVER || 'http://localhost:3030')
     .option('-t, --token <registration-token>', 'Optional repository registration token')
     .description('Push the cryptographically verified package log to the API server')
@@ -573,7 +573,7 @@ export function createCli(): Command {
 
   program
     .command('pull')
-    .argument('<file>', 'Path to write the pulled package log')
+    .argument('[file]', 'Path to write the pulled package log', 'packablock.yaml')
     .option('-s, --server <url>', 'Target API Server URL', process.env.PACKABLOCK_API_SERVER || 'http://localhost:3030')
     .option('-t, --token <registration-token>', 'Optional repository registration token')
     .option('-r, --repo <owner/repo>', 'Optional target repository (owner/repo)')
@@ -646,6 +646,22 @@ export function createCli(): Command {
         console.error(`\n❌ ${colors.red}${colors.bold}Windmill setup failed:${colors.reset} ${err.message}`);
         process.exit(1);
       }
+    });
+
+  program
+    .command('pack')
+    .description('Release packaging (upcoming)')
+    .action(() => {
+      console.log(`📦 ${colors.bold}Release packaging is not yet implemented.${colors.reset}`);
+      process.exit(0);
+    });
+
+  program
+    .command('rollover')
+    .description('Key rotation coordination (upcoming)')
+    .action(() => {
+      console.log(`🔑 ${colors.bold}Key rotation coordination is not yet implemented.${colors.reset}`);
+      process.exit(0);
     });
 
   return program;

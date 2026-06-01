@@ -16,8 +16,14 @@ bun install
 # Initialize a new package log from a lockfile
 bun start init packablock.yaml -l bun.lockb
 
-# Verify the integrity of the log chain
-bun start verify packablock.yaml
+# Check the integrity of the log chain (offline Standalone mode)
+bun start check packablock.yaml
+
+# Anchor-verify/check the chain against the API registry server
+bun start check packablock.yaml --server http://localhost:3030
+
+# Audit package constraints and visualize upstream drift
+bun start audit packablock.yaml --visualize
 
 # Push the verified chain to the API server
 bun start push packablock.yaml --server http://localhost:3030
