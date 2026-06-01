@@ -522,3 +522,106 @@ export async function getPackageHistory(
 
 	return history;
 }
+
+/**
+ * Rolls over the cryptographically secured package chain file.
+ * Creates a linked rollover genesis block and backs up the existing chain.
+ */
+export async function rolloverChain(
+	filepath: string,
+	options: {
+		serverUrl?: string;
+		token?: string;
+		repo?: string;
+	} = {},
+): Promise<{
+	backupPath: string;
+	prevMetaHash: string;
+	newGenesisHash: string;
+}> {
+	const resolvedPath = path.resolve(filepath);
+
+	// 1. Verify log integrity first
+	const report = await verifyChain(resolvedPath);
+	if (!report.valid) {
+		throw new Error(
+			`Chain log integrity verification failed! Cannot roll over a tampered log. Reason: ${report.reason}`,
+		);
+	}
+
+	// 2. Fetch last block details
+	const status = await getChainStatus(resolvedPath);
+	if (!status.lastBlock || !status.lastBlock.meta_hash) {
+		throw new Error(
+			"No blocks found in local chain log. Run init and append some package blocks first.",
+		);
+	}
+	const prevMetaHash = status.lastBlock.meta_hash;
+
+	// 3. Backup the old chain file
+	const backupPath = resolvedPath + ".bak";
+	await fs.copyFile(resolvedPath, backupPath);
+
+	// 4. Create new rollover block data content
+	const rolloverData = `genesis_rollover: true\nrotated_at: "${new Date().toISOString()}"\nprevious_chain_hash: "${prevMetaHash}"\n`;
+
+	try {
+		// 5. Initialize the new chain with the rollover genesis block
+		const newGenesisMeta = await initChain(
+			resolvedPath,
+			rolloverData,
+			prevMetaHash,
+		);
+		const newGenesisHash = newGenesisMeta.meta_hash!;
+
+		// 6. Coordinate with the registry server if configuration is provided
+		const serverUrl =
+			options.serverUrl ||
+			process.env.PACKABLOCK_API_SERVER ||
+			"http://localhost:3030";
+		const { getGitRemoteRepo } = await import("./api.js");
+		const repoPath = options.repo || getGitRemoteRepo();
+
+		if (options.token && repoPath) {
+			const [owner, repoName] = repoPath.split("/");
+			if (owner && repoName) {
+				const newGenesisBlockContent = await fs.readFile(resolvedPath, "utf8");
+
+				const res = await fetch(
+					`${serverUrl.replace(/\/$/, "")}/api/v1/repo/${owner}/${repoName}/rollover`,
+					{
+						method: "POST",
+						headers: {
+							"Content-Type": "application/json",
+							"X-Repo-Token": options.token,
+						},
+						body: JSON.stringify({
+							previous_chain_hash: prevMetaHash,
+							new_genesis_block: newGenesisBlockContent,
+						}),
+					},
+				);
+
+				if (!res.ok) {
+					const errData = (await res
+						.json()
+						.catch(() => ({ message: "Unknown error" }))) as any;
+					throw new Error(errData.message || res.statusText);
+				}
+			}
+		}
+
+		return {
+			backupPath,
+			prevMetaHash,
+			newGenesisHash,
+		};
+	} catch (err: any) {
+		// Rollback in case of server failures
+		try {
+			await fs.copyFile(backupPath, resolvedPath);
+			await fs.unlink(backupPath);
+		} catch (e) {}
+		throw new Error(`Rollover transaction failed: ${err.message}`);
+	}
+}

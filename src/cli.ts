@@ -1126,12 +1126,65 @@ export function createCli(): Command {
 
 	program
 		.command("rollover")
-		.description("Key rotation coordination (upcoming)")
-		.action(() => {
-			console.log(
-				`🔑 ${colors.bold}Key rotation coordination is not yet implemented.${colors.reset}`,
-			);
-			process.exit(0);
+		.argument(
+			"[file]",
+			"Path to the package log file to roll over",
+			"packablock.yaml",
+		)
+		.option(
+			"-s, --server <url>",
+			"Target API Server URL",
+			process.env.PACKABLOCK_API_SERVER || "http://localhost:3030",
+		)
+		.option(
+			"-t, --token <registration-token>",
+			"Optional repository registration token",
+		)
+		.option(
+			"-r, --repo <owner/repo>",
+			"Optional target repository (owner/repo)",
+		)
+		.description(
+			"Generates a cryptographically linked Genesis block across rotational boundaries and syncs state with the registry",
+		)
+		.action(async (file, options) => {
+			try {
+				console.log(
+					`\n🔑 ${colors.bold}Initiating Packablock cryptographic key rollover coordination...${colors.reset}`,
+				);
+
+				const { rolloverChain } = await import("./chain.js");
+				const { backupPath, prevMetaHash, newGenesisHash } =
+					await rolloverChain(file, {
+						serverUrl: options.server,
+						token: options.token || process.env.PACKABLOCK_SIGNING_SECRET,
+						repo: options.repo,
+					});
+
+				console.log(
+					`✅ ${colors.green}${colors.bold}Cryptographic rollover completed successfully!${colors.reset}`,
+				);
+				console.log(
+					`${colors.gray}------------------------------------------------------------${colors.reset}`,
+				);
+				console.log(
+					`${colors.bold}Legacy Backup Path: ${colors.reset}${backupPath}`,
+				);
+				console.log(
+					`${colors.bold}Legacy Chain Hash:  ${colors.reset}${colors.yellow}${prevMetaHash}${colors.reset}`,
+				);
+				console.log(
+					`${colors.bold}New Genesis Hash:   ${colors.reset}${colors.magenta}${newGenesisHash}${colors.reset}`,
+				);
+				console.log(
+					`${colors.gray}------------------------------------------------------------${colors.reset}\n`,
+				);
+			} catch (err: any) {
+				console.error(
+					`\n❌ ${colors.red}Key rotation rollover failed:${colors.reset} ${err.message}`,
+				);
+				process.exit(1);
+			}
 		});
 
 	return program;
