@@ -38,7 +38,7 @@ Because the wrapper automatically exports the correct token session keys inside 
 
 ## 🛠️ Workspace Architecture Mapping
 * **`packablock-client`** (`https://github.com/Packablock/packablock-client`): Bun CLI client that automatically reads the local config and pushes cryptographically verified logs to `/api/v1/log/push`. Contains the `wmill` integration template at `packablock-client/windmill/`.
-* **`packablock-api`** (`https://github.com/Packablock/packablock-api`): The zero-trust attestation registry server (commonly referred to as the **registry repo**). Fastify SQLite server listening locally on port `3030`.
+* **`packablock-registry`** (`https://github.com/Packablock/packablock-api`): The zero-trust Packablock Supply Chain Trust Registry server. Fastify SQLite server listening locally on port `3030`.
 * **Windmill Template**: Located in `packablock-client/windmill/` containing the `verify_and_report` flow and scripts.
 
 ## 🛠️ Tooling & Infrastructure Context
