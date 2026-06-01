@@ -1,0 +1,5 @@
+# yarn.lock
+lodash@^4.17.21:
+  version "4.17.21"
+  resolved "https://npmjs.org"
+  integrity sha512-v2kDEe57iecT9Re3Ew5294Md663914eIdX0q6is9BhOqmStepLQKm3c55Iec9KX+1j5kB+kbBGi7RPBhIm9OBQ==

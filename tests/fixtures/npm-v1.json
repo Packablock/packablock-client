@@ -1,0 +1,34 @@
+{
+  "name": "my-node-app",
+  "version": "1.0.0",
+  "lockfileVersion": 3,
+  "requires": true,
+  "packages": {
+    "": {
+      "name": "my-node-app",
+      "version": "1.0.0",
+      "dependencies": {
+        "express": "^4.18.2"
+      }
+    },
+    "node_modules/accepts": {
+      "version": "1.3.8",
+      "resolved": "https://npmjs.org",
+      "integrity": "sha512-pyVmmx39kV56L39oA3bHCSXACUmY541cMKWppZxw8KCwUtalCsf7VmUtQP19uXgO7gaHyBSzJXg07C0cKN9g====",
+      "engines": {
+        "node": ">= 0.6"
+      }
+    },
+    "node_modules/express": {
+      "version": "4.18.2",
+      "resolved": "https://npmjs.org",
+      "integrity": "sha512-5/Ps1sZyfRRlsUt97fL4nc41vAn70A4861XcoXFJe0M2XbWnK6MwiZ8b9pA====",
+      "dependencies": {
+        "accepts": "~1.3.8"
+      },
+      "engines": {
+        "node": ">= 0.10.0"
+      }
+    }
+  }
+}
