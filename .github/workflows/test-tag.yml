@@ -30,6 +30,7 @@ jobs:
         env:
           # Your VM's secure Tailscale IP address
           PACKABLOCK_API_SERVER: http://100.108.40.3:3030
+          PACKABLOCK_REPO_TOKEN: ${{ secrets.PACKABLOCK_REPO_TOKEN }}
         run: |
           bun install
           
