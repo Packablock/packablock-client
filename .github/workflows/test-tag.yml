@@ -1,0 +1,48 @@
+name: "Test: Tag Build Attestation"
+
+on:
+  push:
+    tags:
+      - 'test-*'
+
+jobs:
+  test-build:
+    name: "Cryptographic SBOM Attestation Check"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # 🔑 Step 1: Securely connect to your private Tailscale network
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v2
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+
+      # 📦 Step 2: Set up environment and verify local SBOM logs
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+
+      # 🚀 Step 3: Verify and push directly to your local Tailscale machine IP!
+      - name: Push Attestation to Local Registry
+        env:
+          # Your VM's secure Tailscale IP address
+          PACKABLOCK_API_SERVER: http://100.108.40.3:3030
+        run: |
+          cd packablock-client
+          bun install
+          
+          echo "Checking for package log chain..."
+          if [ ! -f "packablock.yaml" ]; then
+            echo "Initializing new package log..."
+            bun run index.ts init packablock.yaml
+          fi
+          
+          echo "Running local offline verification (Standalone Mode)..."
+          bun run index.ts check packablock.yaml
+          
+          echo "Syncing attestation log with Supply Chain Trust Registry..."
+          # Uses GITHUB_TOKEN for runner OIDC push verification if needed
+          bun run index.ts push packablock.yaml --server $PACKABLOCK_API_SERVER
