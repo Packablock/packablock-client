@@ -4,7 +4,12 @@ import fsSync from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { initChain } from "../src/chain.js";
-import { packWorkspace, extractSigners, signManifest } from "../src/pack.js";
+import {
+	packWorkspace,
+	extractSigners,
+	signManifest,
+	verifyPack,
+} from "../src/pack.js";
 
 describe("Release Packaging Subcommand Tests", () => {
 	const tempDir = path.resolve(__dirname, "temp-pack-workspace");
@@ -137,5 +142,43 @@ describe("Release Packaging Subcommand Tests", () => {
 
 		// Assert no release.tar.gz was compiled
 		expect(fsSync.existsSync(tempTarball)).toBe(false);
+	});
+
+	it("should successfully verify a packed release tarball", async () => {
+		// Seed a valid local chain
+		const initialChainData = "packages:\n  lodash: 4.17.21";
+		await initChain(tempLog, initialChainData);
+
+		const secret = "verification-secret";
+		const { manifest, tarballPath } = await packWorkspace(
+			tempDir,
+			tempTarball,
+			tempLog,
+			{ secret },
+		);
+
+		// Now verify the tarball using verifyPack
+		const verifyReport = await verifyPack(tarballPath, { secret });
+		expect(verifyReport.valid).toBe(true);
+		expect(verifyReport.manifest).toBeDefined();
+		expect(verifyReport.manifest?.chainStatus.lastBlockHash).toBe(
+			manifest.chainStatus.lastBlockHash,
+		);
+	});
+
+	it("should fail release pack verification if the secret is incorrect", async () => {
+		// Seed a valid local chain
+		await initChain(tempLog, "packages:\n  lodash: 4.17.21");
+
+		const { tarballPath } = await packWorkspace(tempDir, tempTarball, tempLog, {
+			secret: "real-secret",
+		});
+
+		// Verify with a wrong secret
+		const verifyReport = await verifyPack(tarballPath, {
+			secret: "wrong-secret",
+		});
+		expect(verifyReport.valid).toBe(false);
+		expect(verifyReport.reason).toContain("signature verification failed");
 	});
 });

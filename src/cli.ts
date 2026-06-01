@@ -220,6 +220,71 @@ export function createCli(): Command {
 		)
 		.action(async (file, options) => {
 			const resolvedPath = path.resolve(file);
+
+			if (file.endsWith(".tar.gz") || file.endsWith(".tgz")) {
+				console.log(
+					`🔍 ${colors.bold}Verifying secure release pack attestation:${colors.reset} ${file} ...`,
+				);
+
+				try {
+					const { verifyPack } = await import("./pack.js");
+					const report = await verifyPack(resolvedPath, {
+						secret: options.token || process.env.PACKABLOCK_SIGNING_SECRET,
+						serverUrl: options.server,
+						targetRepo: options.repo,
+					});
+
+					if (report.valid && report.manifest) {
+						const manifest = report.manifest;
+						console.log(
+							`\n✅ ${colors.green}${colors.bold}Release pack attestation VERIFIED!${colors.reset}`,
+						);
+						console.log(
+							`${colors.gray}------------------------------------------------------------${colors.reset}`,
+						);
+						console.log(
+							`${colors.bold}Release Timestamp:${colors.reset} ${manifest.timestamp}`,
+						);
+						console.log(
+							`${colors.bold}Anchor Block:${colors.reset}      Block #${manifest.chainStatus.blockCount - 1}`,
+						);
+						console.log(
+							`${colors.bold}Anchor Hash:${colors.reset}       ${colors.magenta}${manifest.chainStatus.lastBlockHash}${colors.reset}`,
+						);
+						console.log(
+							`${colors.bold}Registry Sync:${colors.reset}     ${
+								manifest.registryStatus.isAnchored
+									? `${colors.green}Anchored on ${manifest.registryStatus.registryUrl} (${manifest.registryStatus.syncStatus})${colors.reset}`
+									: `${colors.yellow}Unanchored / Offline${colors.reset}`
+							}`,
+						);
+						console.log(
+							`${colors.bold}Signing Method:${colors.reset}    ${manifest.authType?.toUpperCase()}`,
+						);
+						console.log(`${colors.bold}Provenance Signers:${colors.reset}`);
+						for (const signer of manifest.signerIdentities) {
+							console.log(
+								`  • Block #${signer.blockIndex}: ${signer.committer} (${colors.cyan}${signer.keyIdOrIdentity}${colors.reset})`,
+							);
+						}
+						console.log(
+							`${colors.gray}------------------------------------------------------------${colors.reset}\n`,
+						);
+					} else {
+						console.error(
+							`\n❌ ${colors.red}Release pack verification FAILED:${colors.reset} ${report.reason}`,
+						);
+						process.exit(1);
+					}
+				} catch (err: any) {
+					console.error(
+						`\n❌ ${colors.red}Release pack verification failed:${colors.reset} ${err.message}`,
+					);
+					process.exit(1);
+				}
+				return;
+			}
+
 			console.log(
 				`🔍 ${colors.bold}Verifying chain integrity for:${colors.reset} ${file} ...`,
 			);

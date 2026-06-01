@@ -258,3 +258,142 @@ export async function packWorkspace(
 		tarballPath: resolvedTarball,
 	};
 }
+
+/**
+ * Validates a packaged release tarball, verifying SBOM chain integrity, manifest signatures, and registry anchorage.
+ */
+export async function verifyPack(
+	tarballPath: string,
+	options: { secret?: string; serverUrl?: string; targetRepo?: string },
+): Promise<{
+	valid: boolean;
+	reason?: string;
+	manifest?: BuildManifest;
+}> {
+	const resolvedTarball = path.resolve(tarballPath);
+	const os = await import("node:os");
+	const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pblk-verify-"));
+
+	try {
+		// 1. Extract pblk-manifest.json first to identify the block/ledger state
+		let cmd = `tar -xzf "${resolvedTarball}" -C "${tempDir}" ./pblk-manifest.json`;
+		execSync(cmd, { stdio: "ignore" });
+
+		const manifestPath = path.join(tempDir, "pblk-manifest.json");
+		const manifestStr = await fs.readFile(manifestPath, "utf8");
+		const manifest: BuildManifest = JSON.parse(manifestStr);
+
+		// 2. Extract the chain log packablock.yaml
+		const logName = "packablock.yaml";
+		let cmdLog = `tar -xzf "${resolvedTarball}" -C "${tempDir}" ./${logName}`;
+		execSync(cmdLog, { stdio: "ignore" });
+
+		const logPath = path.join(tempDir, logName);
+
+		// 3. Verify local chain log integrity
+		const report = await verifyChain(logPath);
+		if (!report.valid) {
+			return {
+				valid: false,
+				reason: `Chain log integrity verification failed: ${report.reason}`,
+				manifest,
+			};
+		}
+
+		// Get the last block hash of the unpacked chain
+		const localStatus = await getChainStatus(logPath);
+		if (!localStatus.lastBlock || !localStatus.lastBlock.meta_hash) {
+			return {
+				valid: false,
+				reason: "Unpacked chain log contains no blocks.",
+				manifest,
+			};
+		}
+		const lastBlockHash = localStatus.lastBlock.meta_hash;
+
+		// 4. Verify manifest signature
+		const { signature, authType, ...manifestWithoutSig } = manifest;
+		const signedCheck = signManifest(manifestWithoutSig, options);
+
+		if (
+			manifest.signature !== "unsigned" &&
+			signedCheck.signature !== manifest.signature
+		) {
+			return {
+				valid: false,
+				reason: `Manifest signature verification failed! Expected '${manifest.signature}', but calculated '${signedCheck.signature}'.`,
+				manifest,
+			};
+		}
+
+		// 5. Verify cryptographic binding
+		if (manifest.chainStatus.lastBlockHash !== lastBlockHash) {
+			return {
+				valid: false,
+				reason: `Manifest cryptographic binding mismatch! Manifest points to block hash '${manifest.chainStatus.lastBlockHash}', but actual chain log ends with '${lastBlockHash}'.`,
+				manifest,
+			};
+		}
+
+		// 6. Cross-reference registry if requested
+		if (options.serverUrl && manifest.registryStatus.isAnchored) {
+			const repoPath = options.targetRepo || getGitRemoteRepo();
+			if (repoPath) {
+				const [owner, repo] = repoPath.split("/");
+				if (owner && repo) {
+					try {
+						const res = await fetch(
+							`${options.serverUrl.replace(/\/$/, "")}/api/v1/repo/${owner}/${repo}/history`,
+							{ signal: AbortSignal.timeout(3000) },
+						);
+						if (res.ok) {
+							const data: any = await res.json();
+							if (data.success && data.history && data.history.length > 0) {
+								const latestRemoteBlock = data.history[data.history.length - 1];
+								if (
+									latestRemoteBlock.metaHash !==
+									manifest.chainStatus.lastBlockHash
+								) {
+									return {
+										valid: false,
+										reason: `Registry ledger divergence! Local pack hash is '${manifest.chainStatus.lastBlockHash}', but registry has anchored '${latestRemoteBlock.metaHash}'.`,
+										manifest,
+									};
+								}
+							} else {
+								return {
+									valid: false,
+									reason: "Registry returns empty package history log.",
+									manifest,
+								};
+							}
+						} else {
+							return {
+								valid: false,
+								reason: `Failed to connect to registry server for cross-reference check: HTTP status ${res.status}`,
+								manifest,
+							};
+						}
+					} catch (e) {
+						// Ignored offline
+					}
+				}
+			}
+		}
+
+		return {
+			valid: true,
+			manifest,
+		};
+	} catch (err: any) {
+		return {
+			valid: false,
+			reason: `Failed to verify release pack: ${err.message}`,
+		};
+	} finally {
+		// Clean up temp dir
+		try {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		} catch (e) {}
+	}
+}
