@@ -133,7 +133,7 @@ export interface PushOptions {
   githubOidcToken?: string;
 }
 
-function getGitRemoteRepo(): string | null {
+export function getGitRemoteRepo(): string | null {
   try {
     const url = execSync('git remote get-url origin', { encoding: 'utf8' }).trim();
     // Parse HTTPS: https://github.com/owner/repo.git or SSH: git@github.com:owner/repo.git

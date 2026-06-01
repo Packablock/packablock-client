@@ -8,11 +8,22 @@ import {
   verifyChain, 
   getChainStatus, 
   splitRawDocuments, 
-  generateReleaseNotes 
+  generateReleaseNotes,
+  getPackageHistory
 } from './chain.js';
 import { computeDiff, formatDiffConsole } from './diff.js';
 import { parseLockfiles } from './lockfile.js';
-import { executeDeviceLogin, pushChain, pullChain, registerRepo, loadConfig, saveConfig, setupWindmillWorkspace } from './api.js';
+import { 
+  executeDeviceLogin, 
+  pushChain, 
+  pullChain, 
+  registerRepo, 
+  loadConfig, 
+  saveConfig, 
+  setupWindmillWorkspace,
+  getGitRemoteRepo
+} from './api.js';
+import { parseSemVerConstraint, renderCandle } from './semver.js';
 
 const colors = {
   reset: '\x1b[0m',
@@ -247,6 +258,181 @@ export function createCli(): Command {
         }
       } catch (err: any) {
         console.error(`\n❌ ${colors.red}${colors.bold}Error performing verification:${colors.reset} ${err.message}`);
+        process.exit(1);
+      }
+    });
+
+  program
+    .command('check')
+    .argument('[file]', 'Path to the local log file', 'packablock.yaml')
+    .option('--visualize', 'Visualize package constraints and upstream drift using SemVer Candle charts')
+    .option('-s, --server <url>', 'Target API Server URL', process.env.PACKABLOCK_API_SERVER || 'http://localhost:3030')
+    .option('-t, --token <registration-token>', 'Optional repository registration token')
+    .option('-r, --repo <owner/repo>', 'Optional target repository (owner/repo)')
+    .description('Audit local package constraints and project history against upstream registry releases')
+    .action(async (file, options) => {
+      const resolvedPath = path.resolve(file);
+      try {
+        // 1. Local Cryptographic Integrity Verification
+        const report = await verifyChain(resolvedPath);
+        if (!report.valid) {
+          console.error(`\n❌ ${colors.red}${colors.bold}LOCAL LOG INTEGRITY AUDIT FAILED:${colors.reset}`);
+          console.error(`Reason: ${report.reason}`);
+          process.exit(1);
+        }
+
+        // 2. Fetch history lifecycle from local chain
+        const history = await getPackageHistory(resolvedPath);
+        
+        // 3. Read constraints from local package.json
+        const packageJsonPath = path.resolve('package.json');
+        let packageJson: any = {};
+        try {
+          const pjsContent = await fs.readFile(packageJsonPath, 'utf8');
+          packageJson = JSON.parse(pjsContent);
+        } catch (err: any) {
+          console.error(`\n❌ ${colors.red}${colors.bold}Error reading package.json:${colors.reset} ${err.message}`);
+          process.exit(1);
+        }
+
+        const directDeps = {
+          ...packageJson.dependencies,
+          ...packageJson.devDependencies,
+          ...packageJson.peerDependencies
+        };
+
+        const targetPackages = Object.keys(directDeps).filter(pkgName => history[pkgName] !== undefined);
+
+        if (targetPackages.length === 0) {
+          console.log(`\n🔍 ${colors.bold}Packablock Supply Chain Velocity Audit${colors.reset}`);
+          console.log(`Target: ${path.dirname(resolvedPath)}`);
+          console.log(`Status: ${colors.green}${colors.bold}SECURELY ANCHORED (0 direct packages tracked in chain)${colors.reset}\n`);
+          return;
+        }
+
+        // 4. Query registry server for latest upstream versions if --visualize is requested
+        let latestUpstreamVersions: Record<string, string> = {};
+        let isPremiumUser = false;
+        let isVisualizing = !!options.visualize;
+
+        if (isVisualizing) {
+          const url = `${options.server.replace(/\/$/, '')}/api/v1/packages/latest`;
+          
+          const headers: Record<string, string> = {
+            'Content-Type': 'application/json'
+          };
+          
+          const repoToken = options.token || process.env.PACKABLOCK_REPO_TOKEN;
+          if (repoToken) {
+            headers['X-Repo-Token'] = repoToken;
+          }
+          
+          if (!repoToken) {
+            const config = loadConfig();
+            if (config.github_token) {
+              headers['Authorization'] = `Bearer ${config.github_token}`;
+              const targetRepo = options.repo || getGitRemoteRepo();
+              if (targetRepo) {
+                headers['X-Target-Repo'] = targetRepo;
+              }
+            }
+          }
+
+          try {
+            const response = await fetch(url, {
+              method: 'POST',
+              headers: headers,
+              body: JSON.stringify({ packages: targetPackages })
+            });
+
+            if (response.ok) {
+              const resData = await response.json() as any;
+              if (resData && resData.packages) {
+                latestUpstreamVersions = resData.packages;
+                isPremiumUser = true;
+              }
+            } else if (response.status === 402 || response.status === 403 || response.status === 401) {
+              // Gracefully handle paid paywall or unauthenticated visualizer requests
+              isPremiumUser = false;
+            }
+          } catch (err) {
+            // Server offline or connection error
+            isPremiumUser = false;
+          }
+        }
+
+        // 5. Output Audit Header
+        const status = await getChainStatus(resolvedPath);
+        console.log(`\n🔍 ${colors.bold}Packablock Supply Chain Velocity Audit${colors.reset}`);
+        console.log(`Target: ${path.dirname(resolvedPath)}`);
+        console.log(`Registry Anchor: ${options.server}`);
+        console.log(`Status: ${colors.green}${colors.bold}SECURELY ANCHORED (${status.blockCount} Blocks Aligned)${colors.reset}\n`);
+
+        if (isVisualizing && !isPremiumUser) {
+          console.log(`${colors.yellow}⭐ Premium Feature: Upstream drift analysis and SemVer Candle visualization are only available to paying customers of the hosted Packablock Registry.${colors.reset}`);
+          console.log(`To unlock, subscribe at ${colors.bold}https://packablock.com/pricing${colors.reset} or authenticate using '${colors.bold}pblk login${colors.reset}'.\n`);
+          
+          // Print simplified non-premium summary (names and current/first seen versions)
+          console.log(`${colors.bold}Tracked Dependencies Summary:${colors.reset}`);
+          console.log(`----------------------------------------------------------------------------`);
+          console.log(`Package Name      Constraint  First Seen  Current Pinned`);
+          console.log(`----------------------------------------------------------------------------`);
+          for (const pkg of targetPackages) {
+            const constraint = directDeps[pkg];
+            const first = history[pkg].firstSeen;
+            const pinned = history[pkg].currentPinned;
+            console.log(`${pkg.padEnd(18)} ${constraint.padEnd(11)} ${first.padEnd(11)} ${pinned}`);
+          }
+          console.log(`----------------------------------------------------------------------------\n`);
+          return;
+        }
+
+        if (isVisualizing && isPremiumUser) {
+          console.log(`## SemVer Candle Analysis (Lockfile Lifecycle)`);
+          console.log(`Legend:`);
+          console.log(`  | : Min/Max Constraint Boundary   ░ : Historical Drift (First seen -> Pinned)`);
+          console.log(`  ● : Current Pinned Version        ═ : Unused Allowed Range (Upstream Available)`);
+          console.log(`  ► : Extension to Infinity (>=)\n`);
+          
+          console.log(`----------------------------------------------------------------------------------------------------------------`);
+          console.log(`Package Name      Constraint  Version Timeline (Low -> Installed -> Upstream -> Max)`);
+          console.log(`----------------------------------------------------------------------------------------------------------------`);
+          
+          for (const pkg of targetPackages) {
+            const constraint = directDeps[pkg];
+            const first = history[pkg].firstSeen;
+            const pinned = history[pkg].currentPinned;
+            const latest = latestUpstreamVersions[pkg] || pinned; // fallback to pinned if not found
+            
+            const range = parseSemVerConstraint(constraint, pinned);
+            const candle = renderCandle(range.min, first, pinned, latest, range.max, 40);
+            
+            // Highlight specific risks/warnings based on candle metrics
+            let label = '';
+            if (range.max === 'infinity') {
+              label = ` ${colors.red}(Open Fuse: >= Risk)${colors.reset}`;
+            } else if (pinned === range.max || pinned.startsWith(range.max.replace(/\.x|\.99/g, ''))) {
+              label = ` ${colors.yellow}(Technical Debt Wall)${colors.reset}`;
+            } else if (pinned === latest) {
+              label = ` ${colors.green}(Fully Up-To-Date)${colors.reset}`;
+            }
+            
+            console.log(`${pkg.padEnd(17)} ${constraint.padEnd(11)} ${candle}${label}`);
+          }
+          console.log(`----------------------------------------------------------------------------------------------------------------\n`);
+        } else {
+          // Standard check run without --visualize
+          console.log(`${colors.bold}Tracked Dependencies:${colors.reset}`);
+          for (const pkg of targetPackages) {
+            const constraint = directDeps[pkg];
+            const pinned = history[pkg].currentPinned;
+            console.log(`  * ${colors.green}${pkg}${colors.reset} (pinned to ${pinned}, constraint is ${constraint})`);
+          }
+          console.log();
+        }
+
+      } catch (err: any) {
+        console.error(`\n❌ ${colors.red}${colors.bold}Audit failed:${colors.reset} ${err.message}`);
         process.exit(1);
       }
     });

@@ -437,3 +437,44 @@ export async function generateReleaseNotes(filepath: string, owner = 'packablock
   
   return markdown;
 }
+
+/**
+ * Traces the historical timeline of tracked dependencies from their initial registration to their current state.
+ * Returns a dictionary mapping package names to their first seen and current pinned versions.
+ */
+export async function getPackageHistory(filepath: string): Promise<Record<string, { firstSeen: string; currentPinned: string }>> {
+  const fileContent = await fs.readFile(filepath, 'utf8');
+  const docs = splitRawDocuments(fileContent);
+  
+  const history: Record<string, { firstSeen: string; currentPinned: string }> = {};
+  
+  // Iterate through even indexes (data docs)
+  for (let i = 0; i < docs.length; i += 2) {
+    const dataDocStr = docs[i];
+    if (!dataDocStr) continue;
+    
+    try {
+      const preprocessed = dataDocStr.replace(/^(\s*)(@[^:]+):/gm, '$1"$2":');
+      const parsed = YAML.parse(preprocessed);
+      const packages = parsed?.packages;
+      if (packages) {
+        for (const [name, version] of Object.entries<string>(packages)) {
+          const cleanVer = typeof version === 'string' ? version : String(version);
+          if (!history[name]) {
+            history[name] = {
+              firstSeen: cleanVer,
+              currentPinned: cleanVer
+            };
+          } else {
+            history[name].currentPinned = cleanVer;
+          }
+        }
+      }
+    } catch {
+      // Ignore parse errors on corrupted blocks
+    }
+  }
+  
+  return history;
+}
+
