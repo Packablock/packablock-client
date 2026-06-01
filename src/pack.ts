@@ -3,98 +3,85 @@ import fsSync from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { execSync } from "node:child_process";
-import { verifyChain, getChainStatus } from "./chain.js";
+import { verifyChain, getChainStatus, splitRawDocuments } from "./chain.js";
 import { sha256 } from "./hash.js";
+import { getGitRemoteRepo } from "./api.js";
+import YAML from "yaml";
 
-export interface FileIntegrity {
-	path: string;
-	integrity: string;
+export interface SignerIdentity {
+	blockIndex: number;
+	committer: string;
+	keyIdOrIdentity: string;
 }
 
 export interface BuildManifest {
 	manifestVersion: string;
 	timestamp: string;
-	lastBlockHash: string;
-	blockIndex: number;
-	files: FileIntegrity[];
+	chainStatus: {
+		isHealthy: boolean;
+		blockCount: number;
+		lastBlockHash: string;
+		lastBlockTimestamp: string;
+	};
+	registryStatus: {
+		isAnchored: boolean;
+		registryUrl: string | null;
+		syncStatus: "synced" | "divergent" | "unanchored" | "offline";
+		remoteBlockHash: string | null;
+	};
+	signerIdentities: SignerIdentity[];
 	signature: string;
-	authType?: string;
+	authType: string;
 }
 
 /**
- * Recursively scans the directory to gather all file paths and compute their integrity hashes.
- * Excludes standard directories (.git, node_modules, build outputs, and the output tarball name).
+ * Extracts signer identities from each metadata block in the package chain.
  */
-export async function gatherFiles(
-	dir: string,
-	baseDir: string,
-	outputTarballName: string,
-): Promise<FileIntegrity[]> {
-	const files: FileIntegrity[] = [];
+export async function extractSigners(
+	resolvedLog: string,
+): Promise<SignerIdentity[]> {
+	const content = await fs.readFile(resolvedLog, "utf8");
+	const docs = splitRawDocuments(content);
+	const blockCount = docs.length / 2;
+	const signers: SignerIdentity[] = [];
 
-	async function recurse(currentDir: string) {
-		const entries = await fs.readdir(currentDir, { withFileTypes: true });
+	for (let i = 0; i < blockCount; i++) {
+		const metaDocStr = docs[2 * i + 1];
+		if (metaDocStr === undefined) continue;
 
-		for (const entry of entries) {
-			const fullPath = path.join(currentDir, entry.name);
-			const relativePath = path.relative(baseDir, fullPath);
-
-			// Exclude common developmental/clutter folders
-			if (
-				entry.isDirectory() &&
-				(entry.name === ".git" ||
-					entry.name === "node_modules" ||
-					entry.name === "dist" ||
-					entry.name === "build")
-			) {
-				continue;
+		const parsedMeta = YAML.parse(metaDocStr)?.["$yaml-chain-meta"];
+		if (parsedMeta) {
+			const committer = parsedMeta.committer || "Unknown";
+			// Extract a brief key identifier or fallback to OIDC actor claims
+			let keyIdOrIdentity = "unsigned";
+			if (parsedMeta.signature) {
+				keyIdOrIdentity = parsedMeta.signature.includes("BEGIN")
+					? "gpg-signature"
+					: parsedMeta.signature.substring(0, 16);
+			} else if (parsedMeta.oidc_claims?.actor) {
+				keyIdOrIdentity = parsedMeta.oidc_claims.actor;
 			}
 
-			// Exclude common files, the tarball output, and the manifest itself
-			if (entry.isFile()) {
-				if (
-					entry.name === outputTarballName ||
-					entry.name === "pblk-manifest.json" ||
-					entry.name === ".env" ||
-					entry.name === ".DS_Store"
-				) {
-					continue;
-				}
-
-				try {
-					const fileBytes = await fs.readFile(fullPath);
-					const fileHash = sha256(fileBytes.toString("utf8"));
-					files.push({
-						path: relativePath,
-						integrity: `sha256-${fileHash}`,
-					});
-				} catch (e) {
-					// Skip unreadable files gracefully
-				}
-			} else if (entry.isDirectory()) {
-				await recurse(fullPath);
-			}
+			signers.push({
+				blockIndex: parsedMeta.block_index,
+				committer,
+				keyIdOrIdentity,
+			});
 		}
 	}
 
-	await recurse(dir);
-	// Sort files by path for deterministic manifest hashing
-	return files.sort((a, b) => a.path.localeCompare(b.path));
+	return signers;
 }
 
 /**
- * Signs the build manifest files using HMAC-SHA256 (for shared secrets) or RSA private key.
+ * Signs the build manifest using HMAC-SHA256 or RSA.
  */
 export function signManifest(
-	files: FileIntegrity[],
-	metadata: { lastBlockHash: string; blockIndex: number },
+	manifestWithoutSig: Omit<BuildManifest, "signature" | "authType">,
 	options: { secret?: string; keyPath?: string },
 ): { signature: string; authType: string } {
-	const manifestData = JSON.stringify({
-		lastBlockHash: metadata.lastBlockHash,
-		blockIndex: metadata.blockIndex,
-		files,
-	});
+	// Deterministically sort keys of the manifest report before stringifying
+	const manifestData = JSON.stringify(manifestWithoutSig);
 
 	if (options.secret) {
 		const hmac = crypto
@@ -129,7 +116,12 @@ export async function packWorkspace(
 	dir: string,
 	outputTarball: string,
 	logFile: string,
-	options: { secret?: string; keyPath?: string },
+	options: {
+		secret?: string;
+		keyPath?: string;
+		serverUrl?: string;
+		targetRepo?: string;
+	},
 ): Promise<{ manifest: BuildManifest; tarballPath: string }> {
 	const resolvedDir = path.resolve(dir);
 	const resolvedLog = path.resolve(logFile);
@@ -146,46 +138,94 @@ export async function packWorkspace(
 
 	// 2. Fetch last block details
 	const status = await getChainStatus(resolvedLog);
-	if (!status.lastBlock) {
+	if (!status.lastBlock || !status.lastBlock.meta_hash) {
 		throw new Error(
-			"No blocks found in local chain log. Initialize and add a package to the chain first.",
+			"No healthy blocks found in local chain log. Initialize and add a package to the chain first.",
 		);
-	}
-
-	if (!status.lastBlock.meta_hash) {
-		throw new Error("Last block metadata is missing its cryptographic hash.");
 	}
 
 	const metadata = {
 		lastBlockHash: status.lastBlock.meta_hash,
 		blockIndex: status.lastBlock.block_index,
+		timestamp: status.lastBlock.timestamp,
 	};
 
-	// 3. Gather files and calculate integrity
-	const filesList = await gatherFiles(
-		resolvedDir,
-		resolvedDir,
-		outputTarballName,
-	);
+	// 3. Extract Signer Identities
+	const signerIdentities = await extractSigners(resolvedLog);
 
-	// 4. Sign build manifest
-	const { signature, authType } = signManifest(filesList, metadata, options);
+	// 4. Resolve Registry Anchoring Status
+	let isAnchored = false;
+	let syncStatus: "synced" | "divergent" | "unanchored" | "offline" =
+		"unanchored";
+	let remoteBlockHash: string | null = null;
 
-	const manifest: BuildManifest = {
+	const resolvedServer =
+		options.serverUrl ||
+		process.env.PACKABLOCK_API_SERVER ||
+		"http://localhost:3030";
+	const repoPath = options.targetRepo || getGitRemoteRepo();
+
+	if (repoPath && resolvedServer) {
+		const [owner, repo] = repoPath.split("/");
+		if (owner && repo) {
+			try {
+				const res = await fetch(
+					`${resolvedServer.replace(/\/$/, "")}/api/v1/repo/${owner}/${repo}/history`,
+					{ signal: AbortSignal.timeout(3000) },
+				);
+				if (res.ok) {
+					const data: any = await res.json();
+					if (data.success && data.history && data.history.length > 0) {
+						isAnchored = true;
+						const latestRemoteBlock = data.history[data.history.length - 1];
+						remoteBlockHash = latestRemoteBlock.metaHash;
+						if (remoteBlockHash === metadata.lastBlockHash) {
+							syncStatus = "synced";
+						} else {
+							syncStatus = "divergent";
+						}
+					}
+				} else if (res.status === 404) {
+					syncStatus = "unanchored";
+				}
+			} catch (e) {
+				syncStatus = "offline";
+			}
+		}
+	}
+
+	const manifestWithoutSig: Omit<BuildManifest, "signature" | "authType"> = {
 		manifestVersion: "1.0.0",
 		timestamp: new Date().toISOString(),
-		lastBlockHash: metadata.lastBlockHash,
-		blockIndex: metadata.blockIndex,
-		files: filesList,
+		chainStatus: {
+			isHealthy: status.isHealthy,
+			blockCount: status.blockCount,
+			lastBlockHash: metadata.lastBlockHash,
+			lastBlockTimestamp: metadata.timestamp,
+		},
+		registryStatus: {
+			isAnchored,
+			registryUrl: isAnchored ? resolvedServer : null,
+			syncStatus,
+			remoteBlockHash,
+		},
+		signerIdentities,
+	};
+
+	// 5. Sign build manifest
+	const { signature, authType } = signManifest(manifestWithoutSig, options);
+
+	const manifest: BuildManifest = {
+		...manifestWithoutSig,
 		signature,
 		authType,
 	};
 
-	// 5. Write pblk-manifest.json to target workspace
+	// 6. Write pblk-manifest.json to target workspace
 	const manifestPath = path.join(resolvedDir, "pblk-manifest.json");
 	await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2), "utf8");
 
-	// 6. Compile release tarball to a secure temporary directory
+	// 7. Compile release tarball to a secure temporary directory
 	const os = await import("node:os");
 	const tempTarballDir = await fs.mkdtemp(path.join(os.tmpdir(), "pblk-pack-"));
 	const tempTarballPath = path.join(tempTarballDir, outputTarballName);

@@ -4,7 +4,7 @@ import fsSync from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { initChain } from "../src/chain.js";
-import { packWorkspace, gatherFiles, signManifest } from "../src/pack.js";
+import { packWorkspace, extractSigners, signManifest } from "../src/pack.js";
 
 describe("Release Packaging Subcommand Tests", () => {
 	const tempDir = path.resolve(__dirname, "temp-pack-workspace");
@@ -15,27 +15,13 @@ describe("Release Packaging Subcommand Tests", () => {
 		// Set up mock directory
 		await fs.mkdir(tempDir, { recursive: true });
 		await fs.mkdir(path.join(tempDir, "src"), { recursive: true });
-		await fs.mkdir(path.join(tempDir, "node_modules"), { recursive: true });
-		await fs.mkdir(path.join(tempDir, ".git"), { recursive: true });
 
-		// Add mock files
+		// Add mock source files
 		await fs.writeFile(
 			path.join(tempDir, "src", "index.js"),
 			"console.log('hello');",
 			"utf8",
 		);
-		await fs.writeFile(
-			path.join(tempDir, "src", "utils.js"),
-			"export const add = (a, b) => a + b;",
-			"utf8",
-		);
-		await fs.writeFile(
-			path.join(tempDir, "node_modules", "lodash.js"),
-			"module.exports = {};",
-			"utf8",
-		);
-		await fs.writeFile(path.join(tempDir, ".git", "config"), "[core]", "utf8");
-		await fs.writeFile(path.join(tempDir, ".env"), "SECRET_TOKEN=1234", "utf8");
 	});
 
 	afterEach(async () => {
@@ -45,41 +31,40 @@ describe("Release Packaging Subcommand Tests", () => {
 		} catch (e) {}
 	});
 
-	it("should gather workspace files deterministic excluding common developmental directories and clutter", async () => {
-		const files = await gatherFiles(tempDir, tempDir, "release.tar.gz");
-
-		// Should find src/index.js and src/utils.js
-		const paths = files.map((f) => f.path);
-		expect(paths).toContain("src/index.js");
-		expect(paths).toContain("src/utils.js");
-
-		// Should NOT contain .git, node_modules, or .env files
-		expect(paths).not.toContain(".git/config");
-		expect(paths).not.toContain("node_modules/lodash.js");
-		expect(paths).not.toContain(".env");
-
-		// The list should be alphabetically sorted
-		expect(paths).toEqual(["src/index.js", "src/utils.js"]);
-	});
-
-	it("should sign a manifest correctly with HMAC-SHA256 when a secret is provided", () => {
-		const files = [
-			{ path: "src/index.js", integrity: "sha256-hash1" },
-			{ path: "src/utils.js", integrity: "sha256-hash2" },
-		];
-		const metadata = { lastBlockHash: "mockHash", blockIndex: 2 };
+	it("should sign a manifest report deterministically with HMAC-SHA256", () => {
+		const manifestWithoutSig = {
+			manifestVersion: "1.0.0",
+			timestamp: new Date().toISOString(),
+			chainStatus: {
+				isHealthy: true,
+				blockCount: 1,
+				lastBlockHash: "mockHash",
+				lastBlockTimestamp: "2026-06-01T10:43:18Z",
+			},
+			registryStatus: {
+				isAnchored: false,
+				registryUrl: null,
+				syncStatus: "unanchored" as const,
+				remoteBlockHash: null,
+			},
+			signerIdentities: [
+				{
+					blockIndex: 0,
+					committer: "Aaron Bronow",
+					keyIdOrIdentity: "gpg-key-1",
+				},
+			],
+		};
 		const secret = "shared-secret";
 
-		const { signature, authType } = signManifest(files, metadata, { secret });
+		const { signature, authType } = signManifest(manifestWithoutSig, {
+			secret,
+		});
 		expect(authType).toBe("hmac-sha256");
 		expect(signature).toBeDefined();
 
 		// Manually calculate signature to assert match
-		const expectedData = JSON.stringify({
-			lastBlockHash: metadata.lastBlockHash,
-			blockIndex: metadata.blockIndex,
-			files,
-		});
+		const expectedData = JSON.stringify(manifestWithoutSig);
 		const expectedSig = crypto
 			.createHmac("sha256", secret)
 			.update(expectedData)
@@ -87,7 +72,21 @@ describe("Release Packaging Subcommand Tests", () => {
 		expect(signature).toBe(expectedSig);
 	});
 
-	it("should perform integrity checks, build and sign the manifest, and assemble the release tarball", async () => {
+	it("should parse the chain log and extract unique GPG and OIDC signer identities correctly", async () => {
+		// Seed a valid local chain with standard committer info
+		const initialChainData = "packages:\n  lodash: 4.17.21";
+		const chainMeta = await initChain(tempLog, initialChainData);
+
+		const signers = await extractSigners(tempLog);
+		expect(signers).toHaveLength(1);
+		const firstSigner = signers[0]!;
+		expect(firstSigner.blockIndex).toBe(0);
+		// If unsigned, committer defaults to Unknown or matches signature parsing
+		expect(firstSigner.committer).toBeDefined();
+		expect(firstSigner.keyIdOrIdentity).toBe("unsigned");
+	});
+
+	it("should perform integrity checks, build and sign the refined metadata manifest, and assemble the release tarball", async () => {
 		// Seed a valid local chain
 		const initialChainData = "packages:\n  lodash: 4.17.21";
 		const chainMeta = await initChain(tempLog, initialChainData);
@@ -102,14 +101,21 @@ describe("Release Packaging Subcommand Tests", () => {
 
 		expect(tarballPath).toBe(tempTarball);
 		expect(manifest.manifestVersion).toBe("1.0.0");
-		expect(manifest.lastBlockHash).toBe(chainMeta.meta_hash!);
-		expect(manifest.blockIndex).toBe(0);
+		expect(manifest.chainStatus.isHealthy).toBe(true);
+		expect(manifest.chainStatus.blockCount).toBe(1);
+		expect(manifest.chainStatus.lastBlockHash).toBe(chainMeta.meta_hash!);
 		expect(manifest.authType).toBe("hmac-sha256");
-		expect(manifest.files).toHaveLength(3); // src/index.js, src/utils.js, and packablock.yaml (chain file itself is packaged)
+		expect(manifest.signerIdentities).toHaveLength(1);
 
 		// Assert pblk-manifest.json exists inside target workspace
 		const manifestJsonPath = path.join(tempDir, "pblk-manifest.json");
 		expect(fsSync.existsSync(manifestJsonPath)).toBe(true);
+
+		// Read manifest file and check it does NOT list every source file
+		const manifestContent = JSON.parse(
+			await fs.readFile(manifestJsonPath, "utf8"),
+		);
+		expect(manifestContent.files).toBeUndefined();
 
 		// Assert release.tar.gz was successfully compiled on disk
 		expect(fsSync.existsSync(tempTarball)).toBe(true);

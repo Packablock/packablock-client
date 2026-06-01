@@ -1034,13 +1034,13 @@ export function createCli(): Command {
 					`${colors.bold}Tarball Path:${colors.reset}      ${tarballPath}`,
 				);
 				console.log(
-					`${colors.bold}Anchor Block:${colors.reset}      Block #${manifest.blockIndex}`,
+					`${colors.bold}Anchor Block:${colors.reset}      Block #${manifest.chainStatus.blockCount - 1}`,
 				);
 				console.log(
-					`${colors.bold}Anchor Hash:${colors.reset}       ${colors.magenta}${manifest.lastBlockHash}${colors.reset}`,
+					`${colors.bold}Anchor Hash:${colors.reset}       ${colors.magenta}${manifest.chainStatus.lastBlockHash}${colors.reset}`,
 				);
 				console.log(
-					`${colors.bold}Files Packaged:${colors.reset}    ${manifest.files.length}`,
+					`${colors.bold}Signers Identified:${colors.reset} ${manifest.signerIdentities.length}`,
 				);
 				console.log(
 					`${colors.bold}Signing Method:${colors.reset}    ${manifest.authType?.toUpperCase()}`,
