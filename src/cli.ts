@@ -196,9 +196,9 @@ export function createCli(): Command {
           } else {
             console.log(`\n✅ ${colors.green}${colors.bold}VERIFICATION PASSED:${colors.reset} The log history is cryptographically intact and untampered.`);
             
-            // Print Prominent Warning Box (LEVEL_2_P2P_DIRECT Mode)
+            // Print Prominent Warning Box (LEVEL_2_STANDALONE Mode)
             console.warn(`\n${colors.yellow}│ ⚠️  SECURITY WARNING: DEGRADED TRUST MODE${colors.reset}`);
-            console.warn(`${colors.yellow}│ This verification was executed in pure Peer-to-Peer mode without an${colors.reset}`);
+            console.warn(`${colors.yellow}│ This verification was executed in pure Standalone mode without an${colors.reset}`);
             console.warn(`${colors.yellow}│ external log anchor.${colors.reset}`);
             console.warn(`${colors.yellow}│ While source bytes match what the committer signed, this runner cannot${colors.reset}`);
             console.warn(`${colors.yellow}│ detect localized history rewrites or split-timeline attacks.${colors.reset}\n`);
