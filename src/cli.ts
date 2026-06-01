@@ -993,12 +993,70 @@ export function createCli(): Command {
 
 	program
 		.command("pack")
-		.description("Release packaging (upcoming)")
-		.action(() => {
-			console.log(
-				`📦 ${colors.bold}Release packaging is not yet implemented.${colors.reset}`,
-			);
-			process.exit(0);
+		.argument("[dir]", "Path to the workspace directory to pack", ".")
+		.option("-o, --output <file>", "Output tarball path", "release.tar.gz")
+		.option("-l, --log <file>", "Path to the chain log file", "packablock.yaml")
+		.option(
+			"-s, --secret <text>",
+			"Shared secret to sign the manifest with HMAC-SHA256",
+		)
+		.option(
+			"-k, --key <private-key-path>",
+			"Path to the private key to sign the manifest with RSA-SHA256",
+		)
+		.description(
+			"Verify local chain integrity, sign a build manifest, and compile release tarballs containing the chain",
+		)
+		.action(async (dir, options) => {
+			try {
+				console.log(
+					`\n📦 ${colors.bold}Initiating Packablock secure release packager...${colors.reset}`,
+				);
+
+				const { packWorkspace } = await import("./pack.js");
+				const { manifest, tarballPath } = await packWorkspace(
+					dir,
+					options.output,
+					options.log,
+					{
+						secret: options.secret,
+						keyPath: options.key,
+					},
+				);
+
+				console.log(
+					`✅ ${colors.green}${colors.bold}Release tarball compiled successfully!${colors.reset}`,
+				);
+				console.log(
+					`${colors.gray}------------------------------------------------------------${colors.reset}`,
+				);
+				console.log(
+					`${colors.bold}Tarball Path:${colors.reset}      ${tarballPath}`,
+				);
+				console.log(
+					`${colors.bold}Anchor Block:${colors.reset}      Block #${manifest.blockIndex}`,
+				);
+				console.log(
+					`${colors.bold}Anchor Hash:${colors.reset}       ${colors.magenta}${manifest.lastBlockHash}${colors.reset}`,
+				);
+				console.log(
+					`${colors.bold}Files Packaged:${colors.reset}    ${manifest.files.length}`,
+				);
+				console.log(
+					`${colors.bold}Signing Method:${colors.reset}    ${manifest.authType?.toUpperCase()}`,
+				);
+				console.log(
+					`${colors.bold}Manifest Sig:${colors.reset}      ${colors.cyan}${manifest.signature.substring(0, 16)}...${colors.reset}`,
+				);
+				console.log(
+					`${colors.gray}------------------------------------------------------------${colors.reset}\n`,
+				);
+			} catch (err: any) {
+				console.error(
+					`\n❌ ${colors.red}Release packaging failed:${colors.reset} ${err.message}`,
+				);
+				process.exit(1);
+			}
 		});
 
 	program
