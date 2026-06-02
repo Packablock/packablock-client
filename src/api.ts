@@ -177,6 +177,24 @@ export async function pushChain(
 		"Content-Type": "text/yaml",
 	};
 
+	// Sniff environment metadata for registry integrations auditing
+	const clientOS = process.platform || "unknown";
+	let clientEnv = "BareMetal";
+	try {
+		const fs = require("node:fs");
+		if (fs.existsSync("/.dockerenv") || fs.existsSync("/run/.containerenv")) {
+			clientEnv = "Docker";
+		}
+	} catch (e) {}
+	const isCI = process.env.CI ? "true" : "false";
+	const gitActor = process.env.GITHUB_ACTOR || process.env.USER || "unknown";
+
+	headers["X-Client-Version"] = "1.0.0";
+	headers["X-Client-OS"] = clientOS;
+	headers["X-Client-Env"] = clientEnv;
+	headers["X-Client-CI"] = isCI;
+	headers["X-Client-Actor"] = gitActor;
+
 	// Determine authorization mechanism:
 	// 1. Repo secret registration token (either direct or environment-based)
 	const repoToken = options.repoToken || process.env.PACKABLOCK_REPO_TOKEN;
