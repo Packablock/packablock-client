@@ -76,6 +76,7 @@ export async function initChain(
 	filepath: string,
 	initialDataText: string,
 	prevMetaHash = GENESIS_PREV_HASH,
+	customMeta: Partial<ChainMeta> = {},
 ): Promise<ChainMeta> {
 	// Ensure the directory exists
 	await fs.mkdir(path.dirname(filepath), { recursive: true });
@@ -87,10 +88,11 @@ export async function initChain(
 	const meta: ChainMeta = {
 		version: "1.0.0",
 		block_index: 0,
-		timestamp: new Date().toISOString(),
+		timestamp: customMeta.timestamp || new Date().toISOString(),
 		hashing_strategy: "raw",
 		data_hash: dataHash,
 		prev_meta_hash: prevMetaHash,
+		...customMeta,
 	};
 
 	meta.meta_hash = deterministicMetaHash(meta);
@@ -111,6 +113,7 @@ export async function initChain(
 export async function appendBlock(
 	filepath: string,
 	dataText: string,
+	customMeta: Partial<ChainMeta> = {},
 ): Promise<ChainMeta> {
 	let fileContent = "";
 	try {
@@ -154,10 +157,11 @@ export async function appendBlock(
 	const meta: ChainMeta = {
 		version: "1.0.0",
 		block_index: nextIndex,
-		timestamp: new Date().toISOString(),
+		timestamp: customMeta.timestamp || new Date().toISOString(),
 		hashing_strategy: "raw",
 		data_hash: dataHash,
 		prev_meta_hash: prevMetaHash,
+		...customMeta,
 	};
 
 	meta.meta_hash = deterministicMetaHash(meta);

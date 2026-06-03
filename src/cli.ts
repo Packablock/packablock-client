@@ -1,3 +1,4 @@
+import { execSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Command } from "commander";
@@ -12,6 +13,7 @@ import {
 	setupWindmillWorkspace,
 } from "./api.js";
 import {
+	GENESIS_PREV_HASH,
 	appendBlock,
 	generateReleaseNotes,
 	getChainStatus,
@@ -21,7 +23,7 @@ import {
 	verifyChain,
 } from "./chain.js";
 import { computeDiff, formatDiffConsole } from "./diff.js";
-import { parseLockfiles } from "./lockfile.js";
+import { parseLockfiles, parseSingleLockfileContent } from "./lockfile.js";
 import { parseSemVerConstraint, renderCandle } from "./semver.js";
 
 const colors = {
@@ -101,13 +103,140 @@ export function createCli(): Command {
 			"-l, --lockfile <lockfiles...>",
 			"One or more package-lock.json, bun.lockb, or yarn.lock files to parse",
 		)
+		.option(
+			"-g, --git-history <lockfile-path>",
+			"Replay git history of the specified lockfile to construct the chain",
+		)
 		.description("Initialize a new package log with a genesis block")
 		.action(async (file, options) => {
 			console.log(logo);
+			const resolvedPath = path.resolve(file);
+
+			if (options.gitHistory) {
+				const lockfilePath = options.gitHistory;
+				const lockfileBasename = path.basename(lockfilePath);
+				console.log(
+					`📜 ${colors.bold}Replaying git history for lockfile:${colors.reset} ${lockfilePath}`,
+				);
+
+				try {
+					// 1. Verify git and get log
+					const gitLogCmd = `git log --follow --reverse --format="%H|%aN|%aE|%aI|%s" -- ${lockfilePath}`;
+					const logStdout = execSync(gitLogCmd, { encoding: "utf8" });
+					const lines = logStdout
+						.split("\n")
+						.filter((l) => l.trim().length > 0);
+
+					if (lines.length === 0) {
+						throw new Error(`No git history found for file: ${lockfilePath}`);
+					}
+
+					console.log(
+						`Found ${lines.length} commits modifying ${lockfilePath}. Processing...`,
+					);
+
+					let lastPackagesStr = "";
+					let blockCount = 0;
+
+					for (const line of lines) {
+						const parts = line.split("|");
+						const sha = parts[0];
+						const name = parts[1];
+						const email = parts[2];
+						const date = parts[3];
+						const message = parts.slice(4).join("|");
+
+						if (!sha || !date) continue;
+
+						// 2. Fetch lockfile content at this commit
+						const showCmd = `git show ${sha}:${lockfilePath}`;
+						let content = "";
+						try {
+							content = execSync(showCmd, {
+								encoding: "utf8",
+								stdio: ["pipe", "pipe", "ignore"],
+							});
+						} catch {
+							continue;
+						}
+
+						// 3. Parse content
+						let parsedPackages: Record<string, string> = {};
+						try {
+							parsedPackages = parseSingleLockfileContent(
+								lockfileBasename,
+								content,
+							);
+						} catch (err: any) {
+							console.log(
+								`${colors.yellow}⚠️  Skipping commit ${sha.slice(0, 7)}: unable to parse lockfile (${err.message})${colors.reset}`,
+							);
+							continue;
+						}
+
+						// Sort packages to ensure deterministic YAML
+						const sortedPackages: Record<string, string> = {};
+						for (const key of Object.keys(parsedPackages).sort()) {
+							const val = parsedPackages[key];
+							if (val !== undefined) {
+								sortedPackages[key] = val;
+							}
+						}
+
+						const packagesYaml = YAML.stringify(sortedPackages).trim();
+
+						// 4. Only append if packages map changed
+						if (packagesYaml === lastPackagesStr) {
+							continue;
+						}
+
+						lastPackagesStr = packagesYaml;
+
+						// 5. Construct payload
+						const payloadObj = {
+							commit: sha,
+							author: `${name} <${email}>`,
+							date: date,
+							message: message,
+							packages: sortedPackages,
+						};
+						const blockData = YAML.stringify(payloadObj);
+
+						// 6. Write block
+						const customMeta = {
+							timestamp: date,
+							git_commit: sha,
+						};
+
+						if (blockCount === 0) {
+							await initChain(
+								resolvedPath,
+								blockData,
+								GENESIS_PREV_HASH,
+								customMeta,
+							);
+						} else {
+							await appendBlock(resolvedPath, blockData, customMeta);
+						}
+
+						blockCount++;
+					}
+
+					console.log(
+						`\n✨ ${colors.green}${colors.bold}Success:${colors.reset} Initialized Packablock log at ${colors.bold}${file}${colors.reset} with ${blockCount} replayed dependency update blocks.`,
+					);
+					return;
+				} catch (err: any) {
+					console.error(
+						`\n❌ ${colors.red}${colors.bold}Error replaying history:${colors.reset} ${err.message}`,
+					);
+					process.exit(1);
+				}
+			}
+
 			const data =
 				(await resolveData(options)) ||
 				'message: "Genesis block initialized."\n';
-			const resolvedPath = path.resolve(file);
 
 			try {
 				const meta = await initChain(resolvedPath, data);

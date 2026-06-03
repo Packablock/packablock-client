@@ -83,4 +83,16 @@ describe("Lockfile Parser & Diff Tests", () => {
 			});
 		});
 	});
+
+	describe("Bun (Modern JSON v1.2+ format)", () => {
+		it("should parse Bun modern lockfile correctly", () => {
+			const result = parseLockfiles([
+				path.resolve(__dirname, "../../packablock-demo/example-bun/bun.lock"),
+			]);
+			expect(result.packages["@lezer/common"]).toBe("1.3.0");
+			expect(result.packages["esbuild"]).toBe("0.21.5");
+			expect(result.packages["typescript"]).toBe("6.0.2");
+			expect(result.source).toBe("bun.lock");
+		});
+	});
 });

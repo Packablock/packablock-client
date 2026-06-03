@@ -10,15 +10,33 @@ export interface LockfileData {
  * Parses package-lock.json content.
  */
 function parsePackageLock(content: string): Record<string, string> {
-	const data = JSON.parse(content);
+	const cleanContent = content.replace(/,(\s*[\]}])/g, "$1");
+	const data = JSON.parse(cleanContent);
 	const packages: Record<string, string> = {};
 
-	// Try modern package-lock format (v2/v3)
+	// Try modern package-lock format (v2/v3) or Bun v1.2+ JSON lockfile format
 	if (data.packages) {
 		for (const [pkgPath, pkgInfo] of Object.entries<any>(data.packages)) {
 			if (!pkgPath) continue;
 			// Extract package name from node_modules path
 			const name = pkgPath.replace(/^node_modules\//, "");
+
+			// Bun 1.2 JSON format stores signature arrays: ["pkg@version", ...]
+			if (Array.isArray(pkgInfo)) {
+				const sig = pkgInfo[0];
+				if (typeof sig === "string") {
+					if (sig.startsWith(name + "@")) {
+						packages[name] = sig.slice(name.length + 1);
+					} else {
+						const lastAt = sig.lastIndexOf("@");
+						if (lastAt !== -1) {
+							packages[name] = sig.slice(lastAt + 1);
+						}
+					}
+				}
+				continue;
+			}
+
 			if (name && pkgInfo.version) {
 				packages[name] = pkgInfo.version;
 			}
@@ -130,8 +148,13 @@ export function parseLockfiles(filepaths: string[]): LockfileData {
 				filename.endsWith(".lock")
 			) {
 				const content = readFileSync(absolutePath, "utf8");
-				const pkgs = parseYarnLock(content);
-				Object.assign(combinedPackages, pkgs);
+				try {
+					const pkgs = parsePackageLock(content);
+					Object.assign(combinedPackages, pkgs);
+				} catch {
+					const pkgs = parseYarnLock(content);
+					Object.assign(combinedPackages, pkgs);
+				}
 			} else {
 				// Treat as plain text or try JSON first
 				const content = readFileSync(absolutePath, "utf8");
@@ -161,4 +184,29 @@ export function parseLockfiles(filepaths: string[]): LockfileData {
 		packages: sortedPackages,
 		source: sources.join(", "),
 	};
+}
+
+export function parseSingleLockfileContent(
+	filename: string,
+	content: string,
+): Record<string, string> {
+	if (filename === "package-lock.json") {
+		return parsePackageLock(content);
+	}
+	if (
+		filename === "yarn.lock" ||
+		filename === "bun.lock" ||
+		filename.endsWith(".lock")
+	) {
+		try {
+			return parsePackageLock(content);
+		} catch {
+			return parseYarnLock(content);
+		}
+	}
+	try {
+		return parsePackageLock(content);
+	} catch {
+		return parseYarnLock(content);
+	}
 }
