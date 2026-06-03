@@ -20,6 +20,7 @@ import {
 	getPackageHistory,
 	getLatestPackages,
 	getLatestPackagesForFile,
+	hasLockfileInChain,
 	initChain,
 	splitRawDocuments,
 	verifyChain,
@@ -306,21 +307,39 @@ export function createCli(): Command {
 
 					for (const lockfilePath of options.lockfile) {
 						const filenameKey = path.basename(lockfilePath);
-						const currentPackages = await getLatestPackagesForFile(
+						const isNew = !(await hasLockfileInChain(
 							resolvedPath,
 							filenameKey,
-						);
-						const parsed = parseLockfiles([lockfilePath]);
-						const diff = getPackageDiff(
-							currentPackages,
-							parsed.packages,
-							parsed.locations,
-						);
-						if (diff.length > 0) {
+						));
+
+						if (isNew) {
+							const parsed = parseLockfiles([lockfilePath]);
 							payloadObj[filenameKey] = {
-								packages: diff,
+								chain_event: "init",
+								packages: Object.entries(parsed.packages).map(
+									([name, ver]) => ({
+										[name]: ver,
+									}),
+								),
 							};
-							totalChanges += diff.length;
+							totalChanges++;
+						} else {
+							const currentPackages = await getLatestPackagesForFile(
+								resolvedPath,
+								filenameKey,
+							);
+							const parsed = parseLockfiles([lockfilePath]);
+							const diff = getPackageDiff(
+								currentPackages,
+								parsed.packages,
+								parsed.locations,
+							);
+							if (diff.length > 0) {
+								payloadObj[filenameKey] = {
+									packages: diff,
+								};
+								totalChanges += diff.length;
+							}
 						}
 					}
 

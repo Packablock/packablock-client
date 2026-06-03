@@ -615,6 +615,34 @@ export async function getLatestPackagesForFile(
 	}
 }
 
+export async function hasLockfileInChain(
+	filepath: string,
+	filename: string,
+): Promise<boolean> {
+	try {
+		const fileContent = await fs.readFile(filepath, "utf8");
+		const docs = splitRawDocuments(fileContent);
+
+		for (let i = 0; i < docs.length; i += 2) {
+			const dataDocStr = docs[i];
+			if (!dataDocStr) continue;
+
+			try {
+				const preprocessed = dataDocStr.replace(/^(\s*)(@[^:]+):/gm, '$1"$2":');
+				const parsed = YAML.parse(preprocessed);
+				if (parsed && typeof parsed === "object" && filename in parsed) {
+					return true;
+				}
+			} catch (e) {
+				// Ignore
+			}
+		}
+		return false;
+	} catch {
+		return false;
+	}
+}
+
 export async function getLatestPackages(
 	filepath: string,
 ): Promise<Record<string, string>> {
