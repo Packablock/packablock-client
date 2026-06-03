@@ -148,4 +148,99 @@ describe("Multi-Lockfile Parallel Chain Tracking", () => {
 			expect(err.message).toContain("is not tracked in this chain");
 		}
 	});
+
+	it("should introduce a new lockfile to an existing chain when using the init command", async () => {
+		// 1. Initialize with bun.lock only
+		const genesisData = YAML.stringify({
+			"bun.lock": {
+				packages: [{ lodash: "4.17.21" }],
+			},
+		});
+		await initChain(tempChainPath, genesisData);
+
+		// 2. Mock a lockfile file to read
+		const mockLockfilePath = path.join(__dirname, "mock-package-lock.json");
+		await fs.writeFile(
+			mockLockfilePath,
+			JSON.stringify({
+				lockfileVersion: 3,
+				packages: {
+					"": {
+						dependencies: {
+							lodash: "^4.17.22",
+							zod: "^3.22.4",
+						},
+					},
+					"node_modules/lodash": { version: "4.17.22" },
+					"node_modules/zod": { version: "3.22.4" },
+				},
+			}),
+			"utf8",
+		);
+
+		try {
+			// 3. Run init command with the new lockfile on the existing chain
+			const { execSync } = require("node:child_process");
+			execSync(
+				`bun run ${path.resolve(__dirname, "../index.ts")} init ${tempChainPath} -l ${mockLockfilePath}`,
+				{ stdio: "pipe" },
+			);
+
+			// 4. Verify that the new lockfile is now tracked in the chain with packages
+			const latestNpm = await getLatestPackagesForFile(
+				tempChainPath,
+				"mock-package-lock.json",
+			);
+			expect(latestNpm).toEqual({
+				lodash: "4.17.22",
+				zod: "3.22.4",
+			});
+
+			// Verify bun.lock packages remain unaffected
+			const latestBun = await getLatestPackagesForFile(
+				tempChainPath,
+				"bun.lock",
+			);
+			expect(latestBun).toEqual({
+				lodash: "4.17.21",
+			});
+
+			// 5. Modify the mock lockfile and append
+			await fs.writeFile(
+				mockLockfilePath,
+				JSON.stringify({
+					lockfileVersion: 3,
+					packages: {
+						"": {
+							dependencies: {
+								lodash: "^4.17.22",
+								zod: "^3.23.0",
+							},
+						},
+						"node_modules/lodash": { version: "4.17.22" },
+						"node_modules/zod": { version: "3.23.0" },
+					},
+				}),
+				"utf8",
+			);
+
+			execSync(
+				`bun run ${path.resolve(__dirname, "../index.ts")} append ${tempChainPath} -l ${mockLockfilePath}`,
+				{ stdio: "pipe" },
+			);
+
+			const newStatus = await getChainStatus(tempChainPath);
+			expect(newStatus.blockCount).toBe(3); // Genesis, Init mock-package-lock.json, Append zod update
+
+			const latestNpmAfterAppend = await getLatestPackagesForFile(
+				tempChainPath,
+				"mock-package-lock.json",
+			);
+			expect(latestNpmAfterAppend.zod).toBe("3.23.0");
+		} finally {
+			try {
+				await fs.unlink(mockLockfilePath);
+			} catch {}
+		}
+	});
 });

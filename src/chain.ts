@@ -631,7 +631,17 @@ export async function hasLockfileInChain(
 				const preprocessed = dataDocStr.replace(/^(\s*)(@[^:]+):/gm, '$1"$2":');
 				const parsed = YAML.parse(preprocessed);
 				if (parsed && typeof parsed === "object" && filename in parsed) {
-					return true;
+					if (i === 0) {
+						return true;
+					}
+					const inner = parsed[filename];
+					if (
+						inner &&
+						typeof inner === "object" &&
+						inner.chain_event === "init"
+					) {
+						return true;
+					}
 				}
 			} catch (e) {
 				// Ignore

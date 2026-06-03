@@ -250,6 +250,77 @@ export function createCli(): Command {
 				}
 			}
 
+			let fileExists = false;
+			try {
+				await fs.stat(resolvedPath);
+				fileExists = true;
+			} catch {}
+
+			if (fileExists && options.lockfile && options.lockfile.length > 0) {
+				// Existing chain: check for introducing new lockfiles mid-chain
+				try {
+					const payloadObj: Record<string, any> = {};
+					let newLockfilesCount = 0;
+
+					for (const lockfilePath of options.lockfile) {
+						const filenameKey = path.basename(lockfilePath);
+						const isTracked = await hasLockfileInChain(
+							resolvedPath,
+							filenameKey,
+						);
+						if (!isTracked) {
+							const parsed = parseLockfiles([lockfilePath]);
+							payloadObj[filenameKey] = {
+								chain_event: "init",
+								packages: Object.entries(parsed.packages).map(
+									([name, ver]) => ({
+										[name]: ver,
+									}),
+								),
+							};
+							newLockfilesCount++;
+						}
+					}
+
+					if (newLockfilesCount > 0) {
+						const blockData = YAML.stringify(payloadObj);
+						const meta = await appendBlock(resolvedPath, blockData);
+						console.log(
+							`\n✨ ${colors.green}${colors.bold}Success:${colors.reset} Introduced ${newLockfilesCount} new lockfile(s) to existing log at ${colors.bold}${file}${colors.reset}`,
+						);
+						console.log(
+							`${colors.gray}------------------------------------------------------------${colors.reset}`,
+						);
+						console.log(
+							`${colors.bold}Block Index:${colors.reset} ${meta.block_index}`,
+						);
+						console.log(
+							`${colors.bold}Timestamp:${colors.reset}   ${meta.timestamp}`,
+						);
+						console.log(
+							`${colors.bold}Data Hash:${colors.reset}   ${colors.yellow}${meta.data_hash}${colors.reset}`,
+						);
+						console.log(
+							`${colors.bold}Block Hash:${colors.reset}  ${colors.magenta}${meta.meta_hash}${colors.reset}`,
+						);
+						console.log(
+							`${colors.gray}------------------------------------------------------------${colors.reset}`,
+						);
+						return;
+					} else {
+						console.log(
+							`\nℹ️  All specified lockfile(s) are already tracked in the chain at ${colors.bold}${file}${colors.reset}.`,
+						);
+						return;
+					}
+				} catch (err: any) {
+					console.error(
+						`\n❌ ${colors.red}${colors.bold}Error introducing lockfile(s):${colors.reset} ${err.message}`,
+					);
+					process.exit(1);
+				}
+			}
+
 			const data =
 				(await resolveData(options)) ||
 				'message: "Genesis block initialized."\n';
