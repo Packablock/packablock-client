@@ -19,6 +19,7 @@ import {
 	getChainStatus,
 	getPackageHistory,
 	getLatestPackages,
+	getLatestPackagesForFile,
 	initChain,
 	splitRawDocuments,
 	verifyChain,
@@ -67,17 +68,17 @@ export function createCli(): Command {
 				`📦 ${colors.bold}Parsing lockfiles:${colors.reset} ${options.lockfile.join(", ")}`,
 			);
 			try {
-				const parsed = parseLockfiles(options.lockfile);
-				// Serialize parsed lockfile packages back as clean YAML, normalized and minimal in sourcemap style
-				const filenameKey = path.basename(options.lockfile[0]);
-				const yamlData = YAML.stringify({
-					[filenameKey]: {
+				const payloadObj: Record<string, any> = {};
+				for (const lockfilePath of options.lockfile) {
+					const filenameKey = path.basename(lockfilePath);
+					const parsed = parseLockfiles([lockfilePath]);
+					payloadObj[filenameKey] = {
 						packages: Object.entries(parsed.packages).map(([name, ver]) => ({
 							[name]: ver,
 						})),
-					},
-				});
-				return yamlData;
+					};
+				}
+				return YAML.stringify(payloadObj);
 			} catch (err: any) {
 				console.error(
 					`${colors.red}${colors.bold}Error parsing lockfile: ${colors.reset}${err.message}`,
@@ -300,25 +301,35 @@ export function createCli(): Command {
 					`📦 ${colors.bold}Parsing lockfiles and computing diff:${colors.reset} ${options.lockfile.join(", ")}`,
 				);
 				try {
-					const currentPackages = await getLatestPackages(resolvedPath);
-					const parsed = parseLockfiles(options.lockfile);
-					const diff = getPackageDiff(
-						currentPackages,
-						parsed.packages,
-						parsed.locations,
-					);
+					const payloadObj: Record<string, any> = {};
+					let totalChanges = 0;
 
-					if (diff.length === 0) {
+					for (const lockfilePath of options.lockfile) {
+						const filenameKey = path.basename(lockfilePath);
+						const currentPackages = await getLatestPackagesForFile(
+							resolvedPath,
+							filenameKey,
+						);
+						const parsed = parseLockfiles([lockfilePath]);
+						const diff = getPackageDiff(
+							currentPackages,
+							parsed.packages,
+							parsed.locations,
+						);
+						if (diff.length > 0) {
+							payloadObj[filenameKey] = {
+								packages: diff,
+							};
+							totalChanges += diff.length;
+						}
+					}
+
+					if (totalChanges === 0) {
 						console.log(`\nℹ️  No package changes detected. Nothing to append.`);
 						return;
 					}
 
-					const filenameKey = path.basename(options.lockfile[0]);
-					data = YAML.stringify({
-						[filenameKey]: {
-							packages: diff,
-						},
-					});
+					data = YAML.stringify(payloadObj);
 				} catch (err: any) {
 					console.error(
 						`${colors.red}${colors.bold}Error parsing lockfile: ${colors.reset}${err.message}`,
