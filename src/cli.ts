@@ -21,6 +21,7 @@ import {
 	getLatestPackages,
 	getLatestPackagesForFile,
 	hasLockfileInChain,
+	findLockfileInitBlock,
 	initChain,
 	splitRawDocuments,
 	verifyChain,
@@ -264,22 +265,23 @@ export function createCli(): Command {
 
 					for (const lockfilePath of options.lockfile) {
 						const filenameKey = path.basename(lockfilePath);
-						const isTracked = await hasLockfileInChain(
+						const initBlock = await findLockfileInitBlock(
 							resolvedPath,
 							filenameKey,
 						);
-						if (!isTracked) {
-							const parsed = parseLockfiles([lockfilePath]);
-							payloadObj[filenameKey] = {
-								chain_event: "init",
-								packages: Object.entries(parsed.packages).map(
-									([name, ver]) => ({
-										[name]: ver,
-									}),
-								),
-							};
-							newLockfilesCount++;
+						if (initBlock !== null) {
+							throw new Error(
+								`Lockfile '${filenameKey}' is already tracked in this chain (initialized in Block ${initBlock}). Use 'pblk append' to record updates or specify a new lockfile to track.`,
+							);
 						}
+						const parsed = parseLockfiles([lockfilePath]);
+						payloadObj[filenameKey] = {
+							chain_event: "init",
+							packages: Object.entries(parsed.packages).map(([name, ver]) => ({
+								[name]: ver,
+							})),
+						};
+						newLockfilesCount++;
 					}
 
 					if (newLockfilesCount > 0) {
@@ -305,11 +307,6 @@ export function createCli(): Command {
 						);
 						console.log(
 							`${colors.gray}------------------------------------------------------------${colors.reset}`,
-						);
-						return;
-					} else {
-						console.log(
-							`\nℹ️  All specified lockfile(s) are already tracked in the chain at ${colors.bold}${file}${colors.reset}.`,
 						);
 						return;
 					}

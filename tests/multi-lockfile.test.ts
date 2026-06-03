@@ -243,4 +243,27 @@ describe("Multi-Lockfile Parallel Chain Tracking", () => {
 			} catch {}
 		}
 	});
+
+	it("should throw an error when using init on an already tracked lockfile", async () => {
+		// 1. Initialize with bun.lock only
+		const genesisData = YAML.stringify({
+			"bun.lock": {
+				packages: [{ lodash: "4.17.21" }],
+			},
+		});
+		await initChain(tempChainPath, genesisData);
+
+		// 2. Expect error when running init with bun.lock again on the existing chain
+		const { execSync } = require("node:child_process");
+		try {
+			execSync(
+				`bun run ${path.resolve(__dirname, "../index.ts")} init ${tempChainPath} -l bun.lock`,
+				{ stdio: "pipe" },
+			);
+			expect(true).toBe(false); // should not reach here
+		} catch (err: any) {
+			expect(err.message).toContain("is already tracked in this chain");
+			expect(err.message).toContain("initialized in Block 0");
+		}
+	});
 });

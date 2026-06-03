@@ -615,10 +615,10 @@ export async function getLatestPackagesForFile(
 	}
 }
 
-export async function hasLockfileInChain(
+export async function findLockfileInitBlock(
 	filepath: string,
 	filename: string,
-): Promise<boolean> {
+): Promise<number | null> {
 	try {
 		const fileContent = await fs.readFile(filepath, "utf8");
 		const docs = splitRawDocuments(fileContent);
@@ -632,7 +632,7 @@ export async function hasLockfileInChain(
 				const parsed = YAML.parse(preprocessed);
 				if (parsed && typeof parsed === "object" && filename in parsed) {
 					if (i === 0) {
-						return true;
+						return 0;
 					}
 					const inner = parsed[filename];
 					if (
@@ -640,17 +640,25 @@ export async function hasLockfileInChain(
 						typeof inner === "object" &&
 						inner.chain_event === "init"
 					) {
-						return true;
+						return i / 2;
 					}
 				}
 			} catch (e) {
 				// Ignore
 			}
 		}
-		return false;
+		return null;
 	} catch {
-		return false;
+		return null;
 	}
+}
+
+export async function hasLockfileInChain(
+	filepath: string,
+	filename: string,
+): Promise<boolean> {
+	const block = await findLockfileInitBlock(filepath, filename);
+	return block !== null;
 }
 
 export async function getLatestPackages(
