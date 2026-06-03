@@ -563,7 +563,7 @@ export async function rolloverChain(
 	const prevMetaHash = status.lastBlock.meta_hash;
 
 	// 3. Backup the old chain file
-	const backupPath = resolvedPath + ".bak";
+	const backupPath = `${resolvedPath}.${prevMetaHash}.bak`;
 	await fs.copyFile(resolvedPath, backupPath);
 
 	// 4. Create new rollover block data content

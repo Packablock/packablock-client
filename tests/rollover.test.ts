@@ -40,7 +40,7 @@ describe("Client Log Rollover Cryptographic Validation", () => {
 		const { backupPath, prevMetaHash, newGenesisHash } =
 			await rolloverChain(tempLog);
 
-		expect(backupPath).toBe(tempLog + ".bak");
+		expect(backupPath).toBe(`${tempLog}.${block1Meta.meta_hash!}.bak`);
 		expect(prevMetaHash).toBe(block1Meta.meta_hash!);
 		expect(newGenesisHash).toBeDefined();
 
