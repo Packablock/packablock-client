@@ -409,4 +409,154 @@ describe("Multi-Lockfile Parallel Chain Tracking", () => {
 			} catch {}
 		}
 	});
+
+	it("should enforce strict mode and throw error on append or init to a forgotten file", async () => {
+		const { execSync } = require("node:child_process");
+
+		// Initialize with bun.lock
+		const genesisData = YAML.stringify({
+			"bun.lock": {
+				packages: [{ lodash: "4.17.21" }],
+			},
+		});
+		await initChain(tempChainPath, genesisData);
+
+		// Forget bun.lock
+		execSync(
+			`bun run ${path.resolve(__dirname, "../index.ts")} forget ${tempChainPath} -l bun.lock`,
+			{ stdio: "pipe" },
+		);
+
+		// 1. Try to append with --strict CLI flag
+		const mockLockfilePath = path.join(__dirname, "bun.lock");
+		await fs.writeFile(
+			mockLockfilePath,
+			JSON.stringify({
+				lockfileVersion: 3,
+				packages: {
+					"": { dependencies: { lodash: "^4.17.22" } },
+					"node_modules/lodash": { version: "4.17.22" },
+				},
+			}),
+			"utf8",
+		);
+
+		try {
+			try {
+				execSync(
+					`bun run ${path.resolve(__dirname, "../index.ts")} append ${tempChainPath} -l ${mockLockfilePath} --strict`,
+					{ stdio: "pipe" },
+				);
+				expect(true).toBe(false);
+			} catch (err: any) {
+				expect(err.message).toContain(
+					"cannot be appended to under strict mode",
+				);
+			}
+
+			// 2. Try to append with PACKABLOCK_STRICT env var
+			try {
+				execSync(
+					`bun run ${path.resolve(__dirname, "../index.ts")} append ${tempChainPath} -l ${mockLockfilePath}`,
+					{ stdio: "pipe", env: { ...process.env, PACKABLOCK_STRICT: "true" } },
+				);
+				expect(true).toBe(false);
+			} catch (err: any) {
+				expect(err.message).toContain(
+					"cannot be appended to under strict mode",
+				);
+			}
+
+			// 3. Try to init with --strict CLI flag
+			try {
+				execSync(
+					`bun run ${path.resolve(__dirname, "../index.ts")} init ${tempChainPath} -l ${mockLockfilePath} --strict`,
+					{ stdio: "pipe" },
+				);
+				expect(true).toBe(false);
+			} catch (err: any) {
+				expect(err.message).toContain(
+					"cannot be re-initialized under strict mode",
+				);
+			}
+		} finally {
+			try {
+				await fs.unlink(mockLockfilePath);
+			} catch {}
+		}
+	});
+
+	it("should enforce never-forget mode and disallow forget command or actions on chains with forget events", async () => {
+		const { execSync } = require("node:child_process");
+
+		// Initialize with bun.lock
+		const genesisData = YAML.stringify({
+			"bun.lock": {
+				packages: [{ lodash: "4.17.21" }],
+			},
+		});
+		await initChain(tempChainPath, genesisData);
+
+		// 1. Trying to run forget command with --never-forget CLI flag should fail
+		try {
+			execSync(
+				`bun run ${path.resolve(__dirname, "../index.ts")} forget ${tempChainPath} -l bun.lock --never-forget`,
+				{ stdio: "pipe" },
+			);
+			expect(true).toBe(false);
+		} catch (err: any) {
+			expect(err.message).toContain(
+				"Forget command is disallowed under --never-forget",
+			);
+		}
+
+		// 2. Trying to run forget command with PACKABLOCK_NEVER_FORGET env var should fail
+		try {
+			execSync(
+				`bun run ${path.resolve(__dirname, "../index.ts")} forget ${tempChainPath} -l bun.lock`,
+				{
+					stdio: "pipe",
+					env: { ...process.env, PACKABLOCK_NEVER_FORGET: "true" },
+				},
+			);
+			expect(true).toBe(false);
+		} catch (err: any) {
+			expect(err.message).toContain(
+				"Forget command is disallowed under --never-forget",
+			);
+		}
+
+		// 3. Create a forget event in the chain (by running standard forget without never-forget flags)
+		execSync(
+			`bun run ${path.resolve(__dirname, "../index.ts")} forget ${tempChainPath} -l bun.lock`,
+			{ stdio: "pipe" },
+		);
+
+		// 4. Any subsequent command (e.g. status) on this chain under --never-forget should fail
+		try {
+			execSync(
+				`bun run ${path.resolve(__dirname, "../index.ts")} status ${tempChainPath} --never-forget`,
+				{ stdio: "pipe" },
+			);
+			expect(true).toBe(false);
+		} catch (err: any) {
+			expect(err.message).toContain("Strict policy violation");
+			expect(err.message).toContain("contains forget events");
+		}
+
+		// 5. Any subsequent command (e.g. status) on this chain under PACKABLOCK_NEVER_FORGET env var should fail
+		try {
+			execSync(
+				`bun run ${path.resolve(__dirname, "../index.ts")} status ${tempChainPath}`,
+				{
+					stdio: "pipe",
+					env: { ...process.env, PACKABLOCK_NEVER_FORGET: "true" },
+				},
+			);
+			expect(true).toBe(false);
+		} catch (err: any) {
+			expect(err.message).toContain("Strict policy violation");
+			expect(err.message).toContain("contains forget events");
+		}
+	});
 });

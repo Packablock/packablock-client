@@ -23,6 +23,7 @@ import {
 	hasLockfileInChain,
 	findLockfileInitBlock,
 	findLockfileForgetBlock,
+	hasForgetEvents,
 	initChain,
 	splitRawDocuments,
 	verifyChain,
@@ -62,7 +63,56 @@ export function createCli(): Command {
 	program
 		.name("pblk")
 		.description("Cryptographically secured parallel package log client CLI")
-		.version("1.0.0");
+		.version("1.0.0")
+		.option(
+			"--strict",
+			"Strict mode: Error if attempting to append or init a forgotten lockfile",
+		)
+		.option(
+			"--never-forget",
+			"Never forget mode: Disallow forget events and error on chains with forget events",
+		);
+
+	function isStrictMode(options: any): boolean {
+		return !!(
+			options.strict ||
+			program.opts().strict ||
+			process.env.PACKABLOCK_STRICT
+		);
+	}
+
+	function isNeverForgetMode(options: any): boolean {
+		return !!(
+			options.neverForget ||
+			program.opts().neverForget ||
+			process.env.PACKABLOCK_NEVER_FORGET
+		);
+	}
+
+	async function checkNeverForget(file: string, options: any) {
+		if (isNeverForgetMode(options)) {
+			const resolvedPath = path.resolve(file);
+			try {
+				const exists = await fs
+					.stat(resolvedPath)
+					.then(() => true)
+					.catch(() => false);
+				if (exists) {
+					const hasForget = await hasForgetEvents(resolvedPath);
+					if (hasForget) {
+						throw new Error(
+							"Command disallowed: The package log chain contains forget events, which is prohibited under strict --never-forget / PACKABLOCK_NEVER_FORGET rules.",
+						);
+					}
+				}
+			} catch (err: any) {
+				console.error(
+					`\n❌ ${colors.red}Strict policy violation:${colors.reset} ${err.message}`,
+				);
+				process.exit(1);
+			}
+		}
+	}
 
 	// helper to get data string from options
 	async function resolveData(options: any): Promise<string | null> {
@@ -120,6 +170,7 @@ export function createCli(): Command {
 		)
 		.description("Initialize a new package log with a genesis block")
 		.action(async (file, options) => {
+			await checkNeverForget(file, options);
 			console.log(logo);
 			const resolvedPath = path.resolve(file);
 
@@ -281,6 +332,11 @@ export function createCli(): Command {
 							filenameKey,
 						);
 						if (forgetBlock !== null) {
+							if (isStrictMode(options)) {
+								throw new Error(
+									`Lockfile '${filenameKey}' was forgotten in Block ${forgetBlock} and cannot be re-initialized under strict mode.`,
+								);
+							}
 							console.warn(
 								`⚠️  ${colors.yellow}${colors.bold}Warning:${colors.reset} Lockfile '${filenameKey}' was forgotten in Block ${forgetBlock}. Accepting the init operation.`,
 							);
@@ -374,6 +430,7 @@ export function createCli(): Command {
 		)
 		.description("Append a new dependency block to the package log")
 		.action(async (file, options) => {
+			await checkNeverForget(file, options);
 			const resolvedPath = path.resolve(file);
 			let data = "";
 
@@ -398,6 +455,11 @@ export function createCli(): Command {
 								filenameKey,
 							);
 							if (forgetBlock !== null) {
+								if (isStrictMode(options)) {
+									throw new Error(
+										`Lockfile '${filenameKey}' was forgotten in Block ${forgetBlock} and cannot be appended to under strict mode.`,
+									);
+								}
 								console.warn(
 									`⚠️  ${colors.yellow}${colors.bold}Warning:${colors.reset} Lockfile '${filenameKey}' was forgotten in Block ${forgetBlock}. Accepting the append.`,
 								);
@@ -510,6 +572,7 @@ export function createCli(): Command {
 			"Cryptographically verify the entire package history integrity",
 		)
 		.action(async (file, options) => {
+			await checkNeverForget(file, options);
 			const resolvedPath = path.resolve(file);
 
 			if (file.endsWith(".tar.gz") || file.endsWith(".tgz")) {
@@ -775,6 +838,7 @@ export function createCli(): Command {
 			"Audit local package constraints and project history against upstream registry releases",
 		)
 		.action(async (file, options) => {
+			await checkNeverForget(file, options);
 			const resolvedPath = path.resolve(file);
 			try {
 				// 1. Local Cryptographic Integrity Verification
@@ -1015,7 +1079,8 @@ export function createCli(): Command {
 		.command("status")
 		.argument("<file>", "Path to the log file")
 		.description("Get the current status and statistics of the log")
-		.action(async (file) => {
+		.action(async (file, options) => {
+			await checkNeverForget(file, options);
 			const resolvedPath = path.resolve(file);
 			try {
 				const status = await getChainStatus(resolvedPath);
@@ -1059,7 +1124,8 @@ export function createCli(): Command {
 		.argument("<file>", "Path to the log file")
 		.argument("<index>", "Block index to view")
 		.description("View the payload and metadata of a specific block")
-		.action(async (file, indexStr) => {
+		.action(async (file, indexStr, options) => {
+			await checkNeverForget(file, options);
 			const index = parseInt(indexStr, 10);
 			const resolvedPath = path.resolve(file);
 			try {
@@ -1108,6 +1174,7 @@ export function createCli(): Command {
 			"Generate structured release notes and package log in Markdown",
 		)
 		.action(async (file, options) => {
+			await checkNeverForget(file, options);
 			const resolvedPath = path.resolve(file);
 			try {
 				const markdown = await generateReleaseNotes(
@@ -1160,6 +1227,7 @@ export function createCli(): Command {
 			"Push the cryptographically verified package log to the API server",
 		)
 		.action(async (file, options) => {
+			await checkNeverForget(file, options);
 			const resolvedPath = path.resolve(file);
 
 			// Step 1: Verify locally first!
@@ -1233,6 +1301,7 @@ export function createCli(): Command {
 			"Pull the cryptographically verified package log from the API server",
 		)
 		.action(async (file, options) => {
+			await checkNeverForget(file, options);
 			const resolvedPath = path.resolve(file);
 			try {
 				const content = await pullChain({
@@ -1364,6 +1433,7 @@ export function createCli(): Command {
 			"Verify local chain integrity, sign a build manifest, and compile a metadata-only pack tarball containing the chain and manifest",
 		)
 		.action(async (dir, options) => {
+			await checkNeverForget(options.log || "packablock.yaml", options);
 			try {
 				console.log(
 					`\n📦 ${colors.bold}Initiating Packablock secure metadata-only packager...${colors.reset}`,
@@ -1439,6 +1509,7 @@ export function createCli(): Command {
 			"Generates a cryptographically linked Genesis block across rotational boundaries and syncs state with the registry",
 		)
 		.action(async (file, options) => {
+			await checkNeverForget(file, options);
 			try {
 				console.log(
 					`\n🔑 ${colors.bold}Initiating Packablock cryptographic key rollover coordination...${colors.reset}`,
@@ -1486,6 +1557,13 @@ export function createCli(): Command {
 			"Untrack one or more lockfiles by appending a forget block to the chain",
 		)
 		.action(async (file, options) => {
+			if (isNeverForgetMode(options)) {
+				console.error(
+					`\n❌ ${colors.red}Strict policy violation:${colors.reset} Forget command is disallowed under --never-forget / PACKABLOCK_NEVER_FORGET.`,
+				);
+				process.exit(1);
+			}
+			await checkNeverForget(file, options);
 			const resolvedPath = path.resolve(file);
 			if (!options.lockfile || options.lockfile.length === 0) {
 				console.error(

@@ -705,6 +705,35 @@ export async function findLockfileForgetBlock(
 	}
 }
 
+export async function hasForgetEvents(filepath: string): Promise<boolean> {
+	try {
+		const fileContent = await fs.readFile(filepath, "utf8");
+		const docs = splitRawDocuments(fileContent);
+		for (let i = 0; i < docs.length; i += 2) {
+			const dataDocStr = docs[i];
+			if (!dataDocStr) continue;
+			try {
+				const preprocessed = dataDocStr.replace(/^(\s*)(@[^:]+):/gm, '$1"$2":');
+				const parsed = YAML.parse(preprocessed);
+				if (parsed && typeof parsed === "object") {
+					for (const val of Object.values(parsed)) {
+						if (
+							val &&
+							typeof val === "object" &&
+							(val as any).chain_event === "forget"
+						) {
+							return true;
+						}
+					}
+				}
+			} catch {}
+		}
+		return false;
+	} catch {
+		return false;
+	}
+}
+
 export async function hasLockfileInChain(
 	filepath: string,
 	filename: string,
