@@ -548,7 +548,9 @@ export async function getLatestPackagesForFile(
 				}
 
 				if (inner) {
-					if (Array.isArray(inner.packages)) {
+					if (inner.chain_event === "forget") {
+						currentPackages = {};
+					} else if (Array.isArray(inner.packages)) {
 						const firstItem = inner.packages[0];
 						let isDiff = false;
 						if (firstItem && typeof firstItem === "object") {
@@ -622,6 +624,8 @@ export async function findLockfileInitBlock(
 	try {
 		const fileContent = await fs.readFile(filepath, "utf8");
 		const docs = splitRawDocuments(fileContent);
+		let initBlockIndex: number | null = null;
+		let isTracked = false;
 
 		for (let i = 0; i < docs.length; i += 2) {
 			const dataDocStr = docs[i];
@@ -631,23 +635,24 @@ export async function findLockfileInitBlock(
 				const preprocessed = dataDocStr.replace(/^(\s*)(@[^:]+):/gm, '$1"$2":');
 				const parsed = YAML.parse(preprocessed);
 				if (parsed && typeof parsed === "object" && filename in parsed) {
-					if (i === 0) {
-						return 0;
-					}
 					const inner = parsed[filename];
-					if (
-						inner &&
-						typeof inner === "object" &&
-						inner.chain_event === "init"
-					) {
-						return i / 2;
+					if (i === 0) {
+						initBlockIndex = 0;
+						isTracked = true;
+					} else if (inner && typeof inner === "object") {
+						if (inner.chain_event === "init") {
+							initBlockIndex = i / 2;
+							isTracked = true;
+						} else if (inner.chain_event === "forget") {
+							isTracked = false;
+						}
 					}
 				}
 			} catch (e) {
 				// Ignore
 			}
 		}
-		return null;
+		return isTracked ? initBlockIndex : null;
 	} catch {
 		return null;
 	}
@@ -667,77 +672,46 @@ export async function getLatestPackages(
 	try {
 		const fileContent = await fs.readFile(filepath, "utf8");
 		const docs = splitRawDocuments(fileContent);
-		let currentPackages: Record<string, string> = {};
 
+		// 1. Scan all unique lockfile name keys in the chain
+		const allKeys = new Set<string>();
 		for (let i = 0; i < docs.length; i += 2) {
 			const dataDocStr = docs[i];
 			if (!dataDocStr) continue;
-
 			try {
 				const preprocessed = dataDocStr.replace(/^(\s*)(@[^:]+):/gm, '$1"$2":');
 				const parsed = YAML.parse(preprocessed);
-
 				if (parsed && typeof parsed === "object") {
-					for (const val of Object.values<any>(parsed)) {
-						if (val && typeof val === "object" && val.packages) {
-							if (Array.isArray(val.packages)) {
-								const firstItem = val.packages[0];
-								let isDiff = false;
-								if (firstItem && typeof firstItem === "object") {
-									const values = Object.values(firstItem);
-									if (values.length > 0 && Array.isArray(values[0])) {
-										isDiff = true;
-									}
-								}
-
-								if (!isDiff) {
-									// Genesis Block
-									for (const item of val.packages) {
-										if (item && typeof item === "object") {
-											for (const [name, ver] of Object.entries(item)) {
-												currentPackages[name] = String(ver);
-											}
-										}
-									}
-								} else {
-									// Diff Block
-									for (const item of val.packages) {
-										if (item && typeof item === "object") {
-											for (const [name, ops] of Object.entries(item)) {
-												if (Array.isArray(ops)) {
-													let isRemoved = false;
-													let newVer = "";
-													for (const op of ops) {
-														if (op && typeof op === "object") {
-															if (op.msg === "removed") {
-																isRemoved = true;
-															}
-															if (op.new !== undefined) {
-																newVer = String(op.new);
-															}
-														}
-													}
-													if (isRemoved) {
-														delete currentPackages[name];
-													} else if (newVer) {
-														currentPackages[name] = newVer;
-													}
-												}
-											}
-										}
-									}
-								}
-							}
+					for (const [key, val] of Object.entries(parsed)) {
+						if (val && typeof val === "object" && (val as any).packages) {
+							allKeys.add(key);
 						}
 					}
 				}
-				if (parsed?.packages && !Array.isArray(parsed.packages)) {
-					// Backward compatibility with old format
-					currentPackages = { ...currentPackages, ...parsed.packages };
-				}
-			} catch (e) {
-				// Ignore parse errors on corrupted/incomplete blocks
+			} catch {}
+		}
+
+		// 2. Aggregate packages from tracked lockfiles
+		const currentPackages: Record<string, string> = {};
+		for (const key of allKeys) {
+			const isTracked = (await findLockfileInitBlock(filepath, key)) !== null;
+			if (isTracked) {
+				const pkgs = await getLatestPackagesForFile(filepath, key);
+				Object.assign(currentPackages, pkgs);
 			}
+		}
+
+		// 3. Fallback for backward compatibility with old format
+		for (let i = 0; i < docs.length; i += 2) {
+			const dataDocStr = docs[i];
+			if (!dataDocStr) continue;
+			try {
+				const preprocessed = dataDocStr.replace(/^(\s*)(@[^:]+):/gm, '$1"$2":');
+				const parsed = YAML.parse(preprocessed);
+				if (parsed?.packages && !Array.isArray(parsed.packages)) {
+					Object.assign(currentPackages, parsed.packages);
+				}
+			} catch {}
 		}
 
 		return currentPackages;
@@ -925,15 +899,47 @@ export async function rolloverChain(
 	if (!firstDocStr) {
 		throw new Error("Malformed chain: missing genesis block.");
 	}
-	const firstDocParsed = YAML.parse(firstDocStr);
+
+	const allKeys = new Set<string>();
+	for (let i = 0; i < docs.length; i += 2) {
+		const dataDocStr = docs[i];
+		if (!dataDocStr) continue;
+		try {
+			const preprocessed = dataDocStr.replace(/^(\s*)(@[^:]+):/gm, '$1"$2":');
+			const parsed = YAML.parse(preprocessed);
+			if (parsed && typeof parsed === "object") {
+				for (const [key, val] of Object.entries(parsed)) {
+					if (val && typeof val === "object" && (val as any).packages) {
+						allKeys.add(key);
+					}
+				}
+			}
+		} catch {}
+	}
+
 	const filenameKeys: string[] = [];
-	if (firstDocParsed && typeof firstDocParsed === "object") {
-		for (const [key, val] of Object.entries(firstDocParsed)) {
-			if (val && typeof val === "object" && (val as any).packages) {
-				filenameKeys.push(key);
+	for (const key of allKeys) {
+		const isTracked = (await findLockfileInitBlock(resolvedPath, key)) !== null;
+		if (isTracked) {
+			filenameKeys.push(key);
+		}
+	}
+
+	if (filenameKeys.length === 0) {
+		const firstDocParsed = YAML.parse(firstDocStr);
+		if (firstDocParsed && typeof firstDocParsed === "object") {
+			for (const [key, val] of Object.entries(firstDocParsed)) {
+				if (val && typeof val === "object" && (val as any).packages) {
+					const isTracked =
+						(await findLockfileInitBlock(resolvedPath, key)) !== null;
+					if (isTracked) {
+						filenameKeys.push(key);
+					}
+				}
 			}
 		}
 	}
+
 	if (filenameKeys.length === 0) {
 		filenameKeys.push("package-lock.json"); // default fallback
 	}

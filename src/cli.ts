@@ -1456,5 +1456,71 @@ export function createCli(): Command {
 			}
 		});
 
+	program
+		.command("forget")
+		.argument("<file>", "Path to the package log file")
+		.option("-l, --lockfile <lockfiles...>", "One or more lockfiles to forget")
+		.description(
+			"Untrack one or more lockfiles by appending a forget block to the chain",
+		)
+		.action(async (file, options) => {
+			const resolvedPath = path.resolve(file);
+			if (!options.lockfile || options.lockfile.length === 0) {
+				console.error(
+					`${colors.red}${colors.bold}Error: ${colors.reset}You must specify one or more lockfiles to forget using -l, --lockfile.`,
+				);
+				process.exit(1);
+			}
+
+			try {
+				const payloadObj: Record<string, any> = {};
+
+				for (const lockfilePath of options.lockfile) {
+					const filenameKey = path.basename(lockfilePath);
+					const isTracked = await hasLockfileInChain(resolvedPath, filenameKey);
+
+					if (!isTracked) {
+						throw new Error(
+							`Lockfile '${filenameKey}' is not tracked in this chain.`,
+						);
+					}
+
+					payloadObj[filenameKey] = {
+						chain_event: "forget",
+					};
+				}
+
+				const blockData = YAML.stringify(payloadObj);
+				const meta = await appendBlock(resolvedPath, blockData);
+
+				console.log(
+					`\n👋 ${colors.green}${colors.bold}Lockfile(s) forgotten successfully!${colors.reset}`,
+				);
+				console.log(
+					`${colors.gray}------------------------------------------------------------${colors.reset}`,
+				);
+				console.log(
+					`${colors.bold}Block Index:${colors.reset} ${meta.block_index}`,
+				);
+				console.log(
+					`${colors.bold}Timestamp:${colors.reset}   ${meta.timestamp}`,
+				);
+				console.log(
+					`${colors.bold}Data Hash:${colors.reset}   ${colors.yellow}${meta.data_hash}${colors.reset}`,
+				);
+				console.log(
+					`${colors.bold}Block Hash:${colors.reset}  ${colors.magenta}${meta.meta_hash}${colors.reset}`,
+				);
+				console.log(
+					`${colors.gray}------------------------------------------------------------${colors.reset}\n`,
+				);
+			} catch (err: any) {
+				console.error(
+					`\n❌ ${colors.red}Forget operation failed:${colors.reset} ${err.message}`,
+				);
+				process.exit(1);
+			}
+		});
+
 	return program;
 }

@@ -266,4 +266,118 @@ describe("Multi-Lockfile Parallel Chain Tracking", () => {
 			expect(err.message).toContain("initialized in Block 0");
 		}
 	});
+
+	it("should support the full initialize -> append -> forget -> append error -> re-initialize lifecycle", async () => {
+		const { execSync } = require("node:child_process");
+		const {
+			hasLockfileInChain,
+			getLatestPackages,
+			splitRawDocuments,
+		} = require("../src/chain.ts");
+
+		// 1. Initialize with bun.lock and package-lock.json
+		const genesisData = YAML.stringify({
+			"bun.lock": {
+				packages: [{ lodash: "4.17.21" }],
+			},
+			"package-lock.json": {
+				packages: [{ typescript: "4.9.4" }],
+			},
+		});
+		await initChain(tempChainPath, genesisData);
+
+		expect(await hasLockfileInChain(tempChainPath, "bun.lock")).toBe(true);
+		expect(await hasLockfileInChain(tempChainPath, "package-lock.json")).toBe(
+			true,
+		);
+
+		// 2. Run forget command via CLI
+		execSync(
+			`bun run ${path.resolve(__dirname, "../index.ts")} forget ${tempChainPath} -l package-lock.json`,
+			{ stdio: "pipe" },
+		);
+
+		// 3. Verify tracking is removed and packages are omitted from active package state
+		expect(await hasLockfileInChain(tempChainPath, "bun.lock")).toBe(true);
+		expect(await hasLockfileInChain(tempChainPath, "package-lock.json")).toBe(
+			false,
+		);
+
+		const activePkgs = await getLatestPackages(tempChainPath);
+		expect(activePkgs).toEqual({ lodash: "4.17.21" }); // typescript is omitted because package-lock.json is forgotten
+
+		// 4. Expect error when trying to forget package-lock.json again
+		try {
+			execSync(
+				`bun run ${path.resolve(__dirname, "../index.ts")} forget ${tempChainPath} -l package-lock.json`,
+				{ stdio: "pipe" },
+			);
+			expect(true).toBe(false);
+		} catch (err: any) {
+			expect(err.message).toContain("is not tracked in this chain");
+		}
+
+		// 5. Expect error when trying to append updates to package-lock.json
+		const mockLockfilePath = path.join(__dirname, "mock-package-lock.json");
+		await fs.writeFile(
+			mockLockfilePath,
+			JSON.stringify({
+				lockfileVersion: 3,
+				packages: {
+					"": { dependencies: { typescript: "^4.9.5" } },
+					"node_modules/typescript": { version: "4.9.5" },
+				},
+			}),
+			"utf8",
+		);
+
+		try {
+			try {
+				execSync(
+					`bun run ${path.resolve(__dirname, "../index.ts")} append ${tempChainPath} -l ${mockLockfilePath}`,
+					{ stdio: "pipe" },
+				);
+				expect(true).toBe(false);
+			} catch (err: any) {
+				expect(err.message).toContain("is not tracked in this chain");
+			}
+
+			// 6. Roll over the chain, checking that package-lock.json is omitted from the rollover genesis block
+			const { backupPath } = await rolloverChain(tempChainPath);
+			try {
+				const rolloverContent = await fs.readFile(tempChainPath, "utf8");
+				const docs = splitRawDocuments(rolloverContent);
+				const firstDoc = docs[0];
+				const rolloverParsed = YAML.parse(
+					firstDoc.replace(/^(\s*)(@[^:]+):/gm, '$1"$2":'),
+				);
+				expect(rolloverParsed["bun.lock"]).toBeDefined();
+				expect(rolloverParsed["package-lock.json"]).toBeUndefined();
+			} finally {
+				try {
+					await fs.unlink(backupPath);
+				} catch {}
+			}
+
+			// 7. Re-initialize package-lock.json (mock-package-lock.json) on the rolled over chain
+			execSync(
+				`bun run ${path.resolve(__dirname, "../index.ts")} init ${tempChainPath} -l ${mockLockfilePath}`,
+				{ stdio: "pipe" },
+			);
+
+			// 8. Verify it is tracked again with the new state
+			expect(
+				await hasLockfileInChain(tempChainPath, "mock-package-lock.json"),
+			).toBe(true);
+			const reInitPkgs = await getLatestPackagesForFile(
+				tempChainPath,
+				"mock-package-lock.json",
+			);
+			expect(reInitPkgs).toEqual({ typescript: "4.9.5" });
+		} finally {
+			try {
+				await fs.unlink(mockLockfilePath);
+			} catch {}
+		}
+	});
 });
