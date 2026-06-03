@@ -307,39 +307,32 @@ export function createCli(): Command {
 
 					for (const lockfilePath of options.lockfile) {
 						const filenameKey = path.basename(lockfilePath);
-						const isNew = !(await hasLockfileInChain(
+						const isTracked = await hasLockfileInChain(
 							resolvedPath,
 							filenameKey,
-						));
+						);
 
-						if (isNew) {
-							const parsed = parseLockfiles([lockfilePath]);
+						if (!isTracked) {
+							throw new Error(
+								`Lockfile '${filenameKey}' is not tracked in this chain. New lockfiles can only be introduced when initializing the chain (using 'pblk init').`,
+							);
+						}
+
+						const currentPackages = await getLatestPackagesForFile(
+							resolvedPath,
+							filenameKey,
+						);
+						const parsed = parseLockfiles([lockfilePath]);
+						const diff = getPackageDiff(
+							currentPackages,
+							parsed.packages,
+							parsed.locations,
+						);
+						if (diff.length > 0) {
 							payloadObj[filenameKey] = {
-								chain_event: "init",
-								packages: Object.entries(parsed.packages).map(
-									([name, ver]) => ({
-										[name]: ver,
-									}),
-								),
+								packages: diff,
 							};
-							totalChanges++;
-						} else {
-							const currentPackages = await getLatestPackagesForFile(
-								resolvedPath,
-								filenameKey,
-							);
-							const parsed = parseLockfiles([lockfilePath]);
-							const diff = getPackageDiff(
-								currentPackages,
-								parsed.packages,
-								parsed.locations,
-							);
-							if (diff.length > 0) {
-								payloadObj[filenameKey] = {
-									packages: diff,
-								};
-								totalChanges += diff.length;
-							}
+							totalChanges += diff.length;
 						}
 					}
 

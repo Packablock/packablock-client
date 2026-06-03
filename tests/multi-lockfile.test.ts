@@ -127,7 +127,7 @@ describe("Multi-Lockfile Parallel Chain Tracking", () => {
 		} catch {}
 	});
 
-	it("should support introducing a new lockfile to an existing chain as an init event", async () => {
+	it("should throw an error when attempting to append packages for an untracked lockfile", async () => {
 		// 1. Initialize with bun.lock only
 		const genesisData = YAML.stringify({
 			"bun.lock": {
@@ -136,51 +136,16 @@ describe("Multi-Lockfile Parallel Chain Tracking", () => {
 		});
 		await initChain(tempChainPath, genesisData);
 
-		// 2. Simulate appending a new lockfile package-lock.json
-		const introduceData = YAML.stringify({
-			"package-lock.json": {
-				chain_event: "init",
-				packages: [{ lodash: "4.17.22" }, { zod: "3.22.4" }],
-			},
-		});
-		await appendBlock(tempChainPath, introduceData);
-
-		// Verify that package-lock.json is correctly initialized in the chain
-		const latestNpm = await getLatestPackagesForFile(
-			tempChainPath,
-			"package-lock.json",
-		);
-		expect(latestNpm).toEqual({
-			lodash: "4.17.22",
-			zod: "3.22.4",
-		});
-
-		// Verify bun.lock remains correct
-		const latestBun = await getLatestPackagesForFile(tempChainPath, "bun.lock");
-		expect(latestBun).toEqual({
-			lodash: "4.17.21",
-		});
-
-		// 3. Append diff to the newly introduced package-lock.json
-		const appendData = YAML.stringify({
-			"package-lock.json": {
-				packages: [
-					{
-						zod: [{ old: "3.22.4" }, { new: "3.23.0" }, { loc: "20,10" }],
-					},
-				],
-			},
-		});
-		await appendBlock(tempChainPath, appendData);
-
-		// Verify update has applied to package-lock.json
-		const latestNpm2 = await getLatestPackagesForFile(
-			tempChainPath,
-			"package-lock.json",
-		);
-		expect(latestNpm2).toEqual({
-			lodash: "4.17.22",
-			zod: "3.23.0",
-		});
+		// 2. Expect an error when appending an untracked lockfile via CLI
+		const { execSync } = require("node:child_process");
+		try {
+			execSync(
+				`bun run ${path.resolve(__dirname, "../index.ts")} append ${tempChainPath} -l package-lock.json`,
+				{ stdio: "pipe" },
+			);
+			expect(true).toBe(false); // should not reach here
+		} catch (err: any) {
+			expect(err.message).toContain("is not tracked in this chain");
+		}
 	});
 });
