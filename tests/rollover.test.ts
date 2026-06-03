@@ -41,7 +41,10 @@ describe("Client Log Rollover Cryptographic Validation", () => {
 			await rolloverChain(tempLog);
 
 		expect(backupPath).toBe(
-			path.join(path.dirname(tempLog), `packablock-${block1Meta.meta_hash!}.yaml`),
+			path.join(
+				path.dirname(tempLog),
+				`packablock-${block1Meta.meta_hash!}.yaml`,
+			),
 		);
 		expect(prevMetaHash).toBe(block1Meta.meta_hash!);
 		expect(newGenesisHash).toBeDefined();

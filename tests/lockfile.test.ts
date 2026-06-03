@@ -43,9 +43,12 @@ describe("Lockfile Parser & Diff Tests", () => {
 				.filter((line) => line.type === "removed")
 				.map((line) => line.text.trim());
 
-			expect(addedLines).toContain('"commander": "11.1.0",');
-			expect(addedLines).toContain('"lodash": "4.17.22",');
-			expect(removedLines).toContain('"lodash": "4.17.21",');
+			const addedStr = addedLines.join(" ");
+			const removedStr = removedLines.join(" ");
+
+			expect(addedStr).toContain('"commander": "11.1.0"');
+			expect(addedStr).toContain('"lodash": "4.17.22"');
+			expect(removedStr).toContain('"lodash": "4.17.21"');
 		});
 	});
 

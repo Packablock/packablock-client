@@ -225,7 +225,20 @@ function verifySingleBlock(
 		if (i === 0) {
 			try {
 				const parsedData = YAML.parse(dataDocStr);
-				if (parsedData?.genesis_rollover) {
+				let innerData: any = parsedData;
+				if (
+					parsedData &&
+					typeof parsedData === "object" &&
+					!("genesis_rollover" in parsedData)
+				) {
+					for (const val of Object.values<any>(parsedData)) {
+						if (val && typeof val === "object" && "genesis_rollover" in val) {
+							innerData = val;
+							break;
+						}
+					}
+				}
+				if (innerData?.genesis_rollover) {
 					isRollover = true;
 				}
 			} catch (_e) {
@@ -484,6 +497,103 @@ export async function generateReleaseNotes(
 }
 
 /**
+ * Reconstructs the complete packages state at the latest block of the chain file.
+ * Returns a dictionary mapping package names to versions.
+ */
+export async function getLatestPackages(
+	filepath: string,
+): Promise<Record<string, string>> {
+	try {
+		const fileContent = await fs.readFile(filepath, "utf8");
+		const docs = splitRawDocuments(fileContent);
+		let currentPackages: Record<string, string> = {};
+
+		for (let i = 0; i < docs.length; i += 2) {
+			const dataDocStr = docs[i];
+			if (!dataDocStr) continue;
+
+			try {
+				const preprocessed = dataDocStr.replace(/^(\s*)(@[^:]+):/gm, '$1"$2":');
+				const parsed = YAML.parse(preprocessed);
+
+				// Extract inner content under lockfile root key
+				let inner: any = null;
+				for (const val of Object.values<any>(parsed || {})) {
+					if (val && typeof val === "object" && val.packages) {
+						inner = val;
+						break;
+					}
+				}
+
+				if (inner) {
+					if (Array.isArray(inner.packages)) {
+						const firstItem = inner.packages[0];
+						let isDiff = false;
+						if (firstItem && typeof firstItem === "object") {
+							const values = Object.values(firstItem);
+							if (values.length > 0 && Array.isArray(values[0])) {
+								isDiff = true;
+							}
+						}
+
+						if (!isDiff) {
+							// Genesis Block (List of packages)
+							currentPackages = {};
+							for (const item of inner.packages) {
+								if (item && typeof item === "object") {
+									for (const [name, ver] of Object.entries(item)) {
+										currentPackages[name] = String(ver);
+									}
+								}
+							}
+						} else {
+							// Diff Block
+							for (const item of inner.packages) {
+								if (item && typeof item === "object") {
+									for (const [name, ops] of Object.entries(item)) {
+										if (Array.isArray(ops)) {
+											let isRemoved = false;
+											let newVer = "";
+											for (const op of ops) {
+												if (op && typeof op === "object") {
+													if (op.msg === "removed") {
+														isRemoved = true;
+													}
+													if (op.new !== undefined) {
+														newVer = String(op.new);
+													}
+												}
+											}
+											if (isRemoved) {
+												delete currentPackages[name];
+											} else if (newVer) {
+												currentPackages[name] = newVer;
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				} else if (parsed?.packages && !Array.isArray(parsed.packages)) {
+					// Backward compatibility with old format
+					currentPackages = { ...parsed.packages };
+				}
+			} catch (e) {
+				// Ignore parse errors on corrupted/incomplete blocks
+			}
+		}
+
+		return currentPackages;
+	} catch (err: any) {
+		if (err.code === "ENOENT") {
+			return {};
+		}
+		throw err;
+	}
+}
+
+/**
  * Traces the historical timeline of tracked dependencies from their initial registration to their current state.
  * Returns a dictionary mapping package names to their first seen and current pinned versions.
  */
@@ -504,16 +614,106 @@ export async function getPackageHistory(
 		try {
 			const preprocessed = dataDocStr.replace(/^(\s*)(@[^:]+):/gm, '$1"$2":');
 			const parsed = YAML.parse(preprocessed);
-			const packages = parsed?.packages;
-			if (packages) {
-				for (const [name, version] of Object.entries<string>(packages)) {
+
+			let inner: any = null;
+			for (const val of Object.values<any>(parsed || {})) {
+				if (val && typeof val === "object" && val.packages) {
+					inner = val;
+					break;
+				}
+			}
+
+			if (inner) {
+				if (Array.isArray(inner.packages)) {
+					const firstItem = inner.packages[0];
+					let isDiff = false;
+					if (firstItem && typeof firstItem === "object") {
+						const values = Object.values(firstItem);
+						if (values.length > 0 && Array.isArray(values[0])) {
+							isDiff = true;
+						}
+					}
+
+					if (!isDiff) {
+						// Genesis Block
+						// Determine which packages in history are NOT in the new packages list, and delete them
+						const newKeys = new Set<string>();
+						for (const item of inner.packages) {
+							if (item && typeof item === "object") {
+								for (const name of Object.keys(item)) {
+									newKeys.add(name);
+								}
+							}
+						}
+						for (const name of Object.keys(history)) {
+							if (!newKeys.has(name)) {
+								delete history[name];
+							}
+						}
+
+						for (const item of inner.packages) {
+							if (item && typeof item === "object") {
+								for (const [name, ver] of Object.entries(item)) {
+									const cleanVer = String(ver);
+									if (!history[name]) {
+										history[name] = {
+											firstSeen: cleanVer,
+											currentPinned: cleanVer,
+										};
+									} else {
+										history[name].currentPinned = cleanVer;
+									}
+								}
+							}
+						}
+					} else {
+						// Diff Block
+						for (const item of inner.packages) {
+							if (item && typeof item === "object") {
+								for (const [name, ops] of Object.entries(item)) {
+									if (Array.isArray(ops)) {
+										let isRemoved = false;
+										let newVer = "";
+										for (const op of ops) {
+											if (op && typeof op === "object") {
+												if (op.msg === "removed") {
+													isRemoved = true;
+												}
+												if (op.new !== undefined) {
+													newVer = String(op.new);
+												}
+											}
+										}
+										if (isRemoved) {
+											delete history[name];
+										} else if (newVer) {
+											if (!history[name]) {
+												history[name] = {
+													firstSeen: newVer,
+													currentPinned: newVer,
+												};
+											} else {
+												history[name].currentPinned = newVer;
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			} else if (parsed?.packages && !Array.isArray(parsed.packages)) {
+				// Old format backward compatibility
+				for (const name of Object.keys(history)) {
+					if (!(name in parsed.packages)) {
+						delete history[name];
+					}
+				}
+				for (const [name, version] of Object.entries<string>(parsed.packages)) {
 					const cleanVer =
 						typeof version === "string" ? version : String(version);
 					if (!history[name]) {
-						history[name] = {
-							firstSeen: cleanVer,
-							currentPinned: cleanVer,
-						};
+						history[name] = { firstSeen: cleanVer, currentPinned: cleanVer };
 					} else {
 						history[name].currentPinned = cleanVer;
 					}
@@ -553,7 +753,7 @@ export async function rolloverChain(
 		);
 	}
 
-	// 2. Fetch last block details
+	// 2. Fetch last block details and current packages state before file is overwritten
 	const status = await getChainStatus(resolvedPath);
 	if (!status.lastBlock || !status.lastBlock.meta_hash) {
 		throw new Error(
@@ -561,6 +761,7 @@ export async function rolloverChain(
 		);
 	}
 	const prevMetaHash = status.lastBlock.meta_hash;
+	const currentPackages = await getLatestPackages(resolvedPath);
 
 	// 3. Backup the old chain file
 	const backupPath = path.join(
@@ -569,8 +770,35 @@ export async function rolloverChain(
 	);
 	await fs.copyFile(resolvedPath, backupPath);
 
-	// 4. Create new rollover block data content
-	const rolloverData = `genesis_rollover: true\nrotated_at: "${new Date().toISOString()}"\nprevious_chain_hash: "${prevMetaHash}"\n`;
+	// 4. Create new rollover block data content wrapped under the lockfile name root key
+	const fileContent = await fs.readFile(resolvedPath, "utf8");
+	const docs = splitRawDocuments(fileContent);
+	const firstDocStr = docs[0];
+	if (!firstDocStr) {
+		throw new Error("Malformed chain: missing genesis block.");
+	}
+	const firstDocParsed = YAML.parse(firstDocStr);
+	let filenameKey = "package-lock.json"; // default fallback
+	if (firstDocParsed && typeof firstDocParsed === "object") {
+		for (const [key, val] of Object.entries(firstDocParsed)) {
+			if (val && typeof val === "object" && (val as any).packages) {
+				filenameKey = key;
+				break;
+			}
+		}
+	}
+
+	const rolloverDataObj = {
+		genesis_rollover: true,
+		rotated_at: new Date().toISOString(),
+		previous_chain_hash: prevMetaHash,
+		[filenameKey]: {
+			packages: Object.entries(currentPackages).map(([name, ver]) => ({
+				[name]: ver,
+			})),
+		},
+	};
+	const rolloverData = YAML.stringify(rolloverDataObj);
 
 	try {
 		// 5. Initialize the new chain with the rollover genesis block

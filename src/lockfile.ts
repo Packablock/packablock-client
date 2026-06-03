@@ -3,6 +3,7 @@ import path from "node:path";
 
 export interface LockfileData {
 	packages: Record<string, string>;
+	locations?: Record<string, { line: number; column: number }>;
 	source: string;
 }
 
@@ -119,6 +120,8 @@ function getPackageNameFromRef(ref: string): string {
 export function parseLockfiles(filepaths: string[]): LockfileData {
 	const combinedPackages: Record<string, string> = {};
 	const sources: string[] = [];
+	const combinedLocations: Record<string, { line: number; column: number }> =
+		{};
 
 	for (const file of filepaths) {
 		const absolutePath = path.resolve(file);
@@ -126,8 +129,10 @@ export function parseLockfiles(filepaths: string[]): LockfileData {
 		sources.push(filename);
 
 		try {
+			let fileContentForLocation = "";
 			if (filename === "package-lock.json") {
 				const content = readFileSync(absolutePath, "utf8");
+				fileContentForLocation = content;
 				const pkgs = parsePackageLock(content);
 				Object.assign(combinedPackages, pkgs);
 			} else if (filename === "bun.lockb") {
@@ -135,6 +140,7 @@ export function parseLockfiles(filepaths: string[]): LockfileData {
 				const proc = Bun.spawnSync(["bun", absolutePath]);
 				if (proc.success) {
 					const text = proc.stdout.toString("utf8");
+					fileContentForLocation = text;
 					const pkgs = parseYarnLock(text);
 					Object.assign(combinedPackages, pkgs);
 				} else {
@@ -148,6 +154,7 @@ export function parseLockfiles(filepaths: string[]): LockfileData {
 				filename.endsWith(".lock")
 			) {
 				const content = readFileSync(absolutePath, "utf8");
+				fileContentForLocation = content;
 				try {
 					const pkgs = parsePackageLock(content);
 					Object.assign(combinedPackages, pkgs);
@@ -158,6 +165,7 @@ export function parseLockfiles(filepaths: string[]): LockfileData {
 			} else {
 				// Treat as plain text or try JSON first
 				const content = readFileSync(absolutePath, "utf8");
+				fileContentForLocation = content;
 				try {
 					const pkgs = parsePackageLock(content);
 					Object.assign(combinedPackages, pkgs);
@@ -166,22 +174,24 @@ export function parseLockfiles(filepaths: string[]): LockfileData {
 					Object.assign(combinedPackages, pkgs);
 				}
 			}
+
+			// Locate packages in fileContentForLocation
+			for (const name of Object.keys(combinedPackages)) {
+				if (!(name in combinedLocations)) {
+					combinedLocations[name] = locatePackageInFile(
+						fileContentForLocation,
+						name,
+					);
+				}
+			}
 		} catch (err: any) {
 			throw new Error(`Error parsing lockfile '${file}': ${err.message}`);
 		}
 	}
 
-	// Sort keys alphabetically for clean deterministic display in the genesis block
-	const sortedPackages: Record<string, string> = {};
-	for (const key of Object.keys(combinedPackages).sort()) {
-		const val = combinedPackages[key];
-		if (val !== undefined) {
-			sortedPackages[key] = val;
-		}
-	}
-
 	return {
-		packages: sortedPackages,
+		packages: combinedPackages,
+		locations: combinedLocations,
 		source: sources.join(", "),
 	};
 }
@@ -209,4 +219,51 @@ export function parseSingleLockfileContent(
 	} catch {
 		return parseYarnLock(content);
 	}
+}
+
+/**
+ * Locates the line and column number of a package key within a lockfile string.
+ */
+export function locatePackageInFile(
+	content: string,
+	name: string,
+): { line: number; column: number } {
+	const lines = content.split(/\r?\n/);
+	const escapedName = name.replace(/[-\/\\^$*+?.()|[\]{}]/g, "\\$&");
+
+	const patterns = [
+		new RegExp(`"node_modules/${escapedName}"\\s*:`),
+		new RegExp(`"${escapedName}"\\s*:`),
+		new RegExp(`(?:^|,)\\s*"?${escapedName}@`),
+	];
+
+	for (let i = 0; i < lines.length; i++) {
+		const lineText = lines[i];
+		if (lineText !== undefined) {
+			for (const pattern of patterns) {
+				const match = lineText.match(pattern);
+				if (match && match.index !== undefined) {
+					return {
+						line: i + 1,
+						column: match.index + 1,
+					};
+				}
+			}
+		}
+	}
+
+	for (let i = 0; i < lines.length; i++) {
+		const lineText = lines[i];
+		if (lineText !== undefined) {
+			const idx = lineText.indexOf(name);
+			if (idx !== -1) {
+				return {
+					line: i + 1,
+					column: idx + 1,
+				};
+			}
+		}
+	}
+
+	return { line: 1, column: 1 };
 }

@@ -18,12 +18,17 @@ import {
 	generateReleaseNotes,
 	getChainStatus,
 	getPackageHistory,
+	getLatestPackages,
 	initChain,
 	splitRawDocuments,
 	verifyChain,
 } from "./chain.js";
-import { computeDiff, formatDiffConsole } from "./diff.js";
-import { parseLockfiles, parseSingleLockfileContent } from "./lockfile.js";
+import { computeDiff, formatDiffConsole, getPackageDiff } from "./diff.js";
+import {
+	parseLockfiles,
+	parseSingleLockfileContent,
+	locatePackageInFile,
+} from "./lockfile.js";
 import { parseSemVerConstraint, renderCandle } from "./semver.js";
 
 const colors = {
@@ -63,13 +68,15 @@ export function createCli(): Command {
 			);
 			try {
 				const parsed = parseLockfiles(options.lockfile);
-				// Serialize parsed lockfile packages back as clean YAML
-				const yamlData =
-					`source: "${parsed.source}"\nevent: "dependencies_baseline"\npackages:\n` +
-					Object.entries(parsed.packages)
-						.map(([name, ver]) => `  ${name}: "${ver}"`)
-						.join("\n") +
-					"\n";
+				// Serialize parsed lockfile packages back as clean YAML, normalized and minimal in sourcemap style
+				const filenameKey = path.basename(options.lockfile[0]);
+				const yamlData = YAML.stringify({
+					[filenameKey]: {
+						packages: Object.entries(parsed.packages).map(([name, ver]) => ({
+							[name]: ver,
+						})),
+					},
+				});
 				return yamlData;
 			} catch (err: any) {
 				console.error(
@@ -135,6 +142,7 @@ export function createCli(): Command {
 						`Found ${lines.length} commits modifying ${lockfilePath}. Processing...`,
 					);
 
+					let lastPackages: Record<string, string> = {};
 					let lastPackagesStr = "";
 					let blockCount = 0;
 
@@ -174,16 +182,9 @@ export function createCli(): Command {
 							continue;
 						}
 
-						// Sort packages to ensure deterministic YAML
-						const sortedPackages: Record<string, string> = {};
-						for (const key of Object.keys(parsedPackages).sort()) {
-							const val = parsedPackages[key];
-							if (val !== undefined) {
-								sortedPackages[key] = val;
-							}
-						}
-
-						const packagesYaml = YAML.stringify(sortedPackages).trim();
+						// Keep raw order
+						const rawPackages = parsedPackages;
+						const packagesYaml = YAML.stringify(rawPackages).trim();
 
 						// 4. Only append if packages map changed
 						if (packagesYaml === lastPackagesStr) {
@@ -192,23 +193,21 @@ export function createCli(): Command {
 
 						lastPackagesStr = packagesYaml;
 
-						// 5. Construct payload
-						const payloadObj = {
-							commit: sha,
-							author: `${name} <${email}>`,
-							date: date,
-							message: message,
-							packages: sortedPackages,
-						};
-						const blockData = YAML.stringify(payloadObj);
-
-						// 6. Write block
+						// 5. Construct payload & Write block
 						const customMeta = {
 							timestamp: date,
-							git_commit: sha,
 						};
 
 						if (blockCount === 0) {
+							const filenameKey = path.basename(lockfilePath);
+							const payloadObj = {
+								[filenameKey]: {
+									packages: Object.entries(rawPackages).map(([name, ver]) => ({
+										[name]: ver,
+									})),
+								},
+							};
+							const blockData = YAML.stringify(payloadObj);
 							await initChain(
 								resolvedPath,
 								blockData,
@@ -216,9 +215,24 @@ export function createCli(): Command {
 								customMeta,
 							);
 						} else {
+							const locations: Record<
+								string,
+								{ line: number; column: number }
+							> = {};
+							for (const name of Object.keys(rawPackages)) {
+								locations[name] = locatePackageInFile(content, name);
+							}
+							const filenameKey = path.basename(lockfilePath);
+							const diff = getPackageDiff(lastPackages, rawPackages, locations);
+							const blockData = YAML.stringify({
+								[filenameKey]: {
+									packages: diff,
+								},
+							});
 							await appendBlock(resolvedPath, blockData, customMeta);
 						}
 
+						lastPackages = rawPackages;
 						blockCount++;
 					}
 
@@ -278,7 +292,43 @@ export function createCli(): Command {
 		)
 		.description("Append a new dependency block to the package log")
 		.action(async (file, options) => {
-			const data = await resolveData(options);
+			const resolvedPath = path.resolve(file);
+			let data = "";
+
+			if (options.lockfile && options.lockfile.length > 0) {
+				console.log(
+					`📦 ${colors.bold}Parsing lockfiles and computing diff:${colors.reset} ${options.lockfile.join(", ")}`,
+				);
+				try {
+					const currentPackages = await getLatestPackages(resolvedPath);
+					const parsed = parseLockfiles(options.lockfile);
+					const diff = getPackageDiff(
+						currentPackages,
+						parsed.packages,
+						parsed.locations,
+					);
+
+					if (diff.length === 0) {
+						console.log(`\nℹ️  No package changes detected. Nothing to append.`);
+						return;
+					}
+
+					const filenameKey = path.basename(options.lockfile[0]);
+					data = YAML.stringify({
+						[filenameKey]: {
+							packages: diff,
+						},
+					});
+				} catch (err: any) {
+					console.error(
+						`${colors.red}${colors.bold}Error parsing lockfile: ${colors.reset}${err.message}`,
+					);
+					process.exit(1);
+				}
+			} else {
+				data = (await resolveData(options)) || "";
+			}
+
 			if (!data) {
 				console.error(
 					`${colors.red}${colors.bold}Error: ${colors.reset}You must provide data (-d, -f, or -l option).`,
@@ -286,7 +336,6 @@ export function createCli(): Command {
 				process.exit(1);
 			}
 
-			const resolvedPath = path.resolve(file);
 			try {
 				const meta = await appendBlock(resolvedPath, data);
 				console.log(

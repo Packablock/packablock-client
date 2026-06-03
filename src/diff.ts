@@ -98,3 +98,57 @@ export function formatDiffConsole(diff: DiffLine[]): string {
 		})
 		.join("\n");
 }
+
+export interface DiffItem {
+	[packageName: string]: Array<
+		{ old: string } | { new: string } | { loc: string } | { msg: string }
+	>;
+}
+
+export type PackageDiff = DiffItem[];
+
+/**
+ * Computes structured package changes (added, removed, changed) between two package maps,
+ * outputting them in sourcemap format with locations.
+ */
+export function getPackageDiff(
+	prevPkgs: Record<string, string>,
+	currPkgs: Record<string, string>,
+	locations: Record<string, { line: number; column: number }> = {},
+): PackageDiff {
+	const diff: DiffItem[] = [];
+
+	const allKeys = Array.from(
+		new Set([...Object.keys(prevPkgs), ...Object.keys(currPkgs)]),
+	);
+
+	for (const name of allKeys) {
+		const prevVal = prevPkgs[name];
+		const currVal = currPkgs[name];
+		const loc = locations[name] || { line: 1, column: 1 };
+		const locStr = `${loc.line},${loc.column}`;
+
+		if (prevVal !== undefined && currVal === undefined) {
+			// Removed
+			diff.push({
+				[name]: [{ msg: "removed" }, { loc: locStr }],
+			});
+		} else if (prevVal === undefined && currVal !== undefined) {
+			// Added
+			diff.push({
+				[name]: [{ new: currVal }, { loc: locStr }],
+			});
+		} else if (
+			prevVal !== undefined &&
+			currVal !== undefined &&
+			prevVal !== currVal
+		) {
+			// Changed
+			diff.push({
+				[name]: [{ old: prevVal }, { new: currVal }, { loc: locStr }],
+			});
+		}
+	}
+
+	return diff;
+}

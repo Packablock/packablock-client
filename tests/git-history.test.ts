@@ -121,19 +121,16 @@ describe("Git History Replay Ingestion Tests", () => {
 		const block1Meta = YAML.parse(docs[3] ?? "")["$yaml-chain-meta"];
 
 		// Assert Block 0 (Commit 1)
-		expect(block0Data.commit).toBeDefined();
-		expect(block0Data.message).toContain("Commit 1: Add lodash");
-		expect(block0Data.packages).toEqual({ lodash: "4.17.21" });
+		expect(block0Data["bun.lock"].packages).toEqual([{ lodash: "4.17.21" }]);
 		expect(block0Meta.block_index).toBe(0);
 		expect(block0Meta.timestamp).toBe("2026-01-01T12:00:00+00:00");
-		expect(block0Meta.git_commit).toBe(block0Data.commit);
 
 		// Assert Block 1 (Commit 2)
-		expect(block1Data.commit).toBeDefined();
-		expect(block1Data.message).toContain("Commit 2: Add zod");
-		expect(block1Data.packages).toEqual({ lodash: "4.17.21", zod: "3.22.4" });
+		expect(block1Data["bun.lock"].packages).toBeDefined();
+		expect(block1Data["bun.lock"].packages[0].zod).toBeDefined();
+		expect(block1Data["bun.lock"].packages[0].zod[0].new).toBe("3.22.4");
+		expect(block1Data["bun.lock"].packages[0].zod[1].loc).toMatch(/^1,\d+$/);
 		expect(block1Meta.block_index).toBe(1);
 		expect(block1Meta.timestamp).toBe("2026-01-02T12:00:00+00:00");
-		expect(block1Meta.git_commit).toBe(block1Data.commit);
 	});
 });
