@@ -22,6 +22,7 @@ import {
 	getLatestPackagesForFile,
 	hasLockfileInChain,
 	findLockfileInitBlock,
+	findLockfileForgetBlock,
 	initChain,
 	splitRawDocuments,
 	verifyChain,
@@ -274,6 +275,17 @@ export function createCli(): Command {
 								`Lockfile '${filenameKey}' is already tracked in this chain (initialized in Block ${initBlock}). Use 'pblk append' to record updates or specify a new lockfile to track.`,
 							);
 						}
+
+						const forgetBlock = await findLockfileForgetBlock(
+							resolvedPath,
+							filenameKey,
+						);
+						if (forgetBlock !== null) {
+							console.warn(
+								`⚠️  ${colors.yellow}${colors.bold}Warning:${colors.reset} Lockfile '${filenameKey}' was forgotten in Block ${forgetBlock}. Accepting the init operation.`,
+							);
+						}
+
 						const parsed = parseLockfiles([lockfilePath]);
 						payloadObj[filenameKey] = {
 							chain_event: "init",
@@ -381,9 +393,19 @@ export function createCli(): Command {
 						);
 
 						if (!isTracked) {
-							throw new Error(
-								`Lockfile '${filenameKey}' is not tracked in this chain. New lockfiles can only be introduced when initializing the chain (using 'pblk init').`,
+							const forgetBlock = await findLockfileForgetBlock(
+								resolvedPath,
+								filenameKey,
 							);
+							if (forgetBlock !== null) {
+								console.warn(
+									`⚠️  ${colors.yellow}${colors.bold}Warning:${colors.reset} Lockfile '${filenameKey}' was forgotten in Block ${forgetBlock}. Accepting the append.`,
+								);
+							} else {
+								throw new Error(
+									`Lockfile '${filenameKey}' is not tracked in this chain. New lockfiles can only be introduced when initializing the chain (using 'pblk init').`,
+								);
+							}
 						}
 
 						const currentPackages = await getLatestPackagesForFile(

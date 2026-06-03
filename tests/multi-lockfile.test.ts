@@ -317,8 +317,8 @@ describe("Multi-Lockfile Parallel Chain Tracking", () => {
 			expect(err.message).toContain("is not tracked in this chain");
 		}
 
-		// 5. Expect error when trying to append updates to package-lock.json
-		const mockLockfilePath = path.join(__dirname, "mock-package-lock.json");
+		// 5. Test append on a forgotten lockfile: should warn and accept the append, and then the lockfile is tracked again
+		const mockLockfilePath = path.join(__dirname, "package-lock.json");
 		await fs.writeFile(
 			mockLockfilePath,
 			JSON.stringify({
@@ -332,17 +332,26 @@ describe("Multi-Lockfile Parallel Chain Tracking", () => {
 		);
 
 		try {
-			try {
-				execSync(
-					`bun run ${path.resolve(__dirname, "../index.ts")} append ${tempChainPath} -l ${mockLockfilePath}`,
-					{ stdio: "pipe" },
-				);
-				expect(true).toBe(false);
-			} catch (err: any) {
-				expect(err.message).toContain("is not tracked in this chain");
-			}
+			// Runs append and checks it succeeds (accepts append) and warns about forget event block (Block 1)
+			const appendResult = execSync(
+				`bun run ${path.resolve(__dirname, "../index.ts")} append ${tempChainPath} -l ${mockLockfilePath} 2>&1`,
+				{ stdio: "pipe", encoding: "utf8" },
+			);
+			expect(appendResult).toContain("was forgotten in Block 1");
+			expect(await hasLockfileInChain(tempChainPath, "package-lock.json")).toBe(
+				true,
+			);
 
-			// 6. Roll over the chain, checking that package-lock.json is omitted from the rollover genesis block
+			// 6. Forget package-lock.json again so we can test rollover omission and re-init warning
+			execSync(
+				`bun run ${path.resolve(__dirname, "../index.ts")} forget ${tempChainPath} -l package-lock.json`,
+				{ stdio: "pipe" },
+			);
+			expect(await hasLockfileInChain(tempChainPath, "package-lock.json")).toBe(
+				false,
+			);
+
+			// 7. Roll over the chain, checking that package-lock.json is omitted from the rollover genesis block
 			const { backupPath } = await rolloverChain(tempChainPath);
 			try {
 				const rolloverContent = await fs.readFile(tempChainPath, "utf8");
@@ -359,21 +368,41 @@ describe("Multi-Lockfile Parallel Chain Tracking", () => {
 				} catch {}
 			}
 
-			// 7. Re-initialize package-lock.json (mock-package-lock.json) on the rolled over chain
+			// We need a forget event in the active chain to test the init warning on a forgotten file.
+			// Let's forget bun.lock in the new chain! (Block 0 is rollover genesis).
+			// Block 1 will be forget bun.lock.
 			execSync(
-				`bun run ${path.resolve(__dirname, "../index.ts")} init ${tempChainPath} -l ${mockLockfilePath}`,
+				`bun run ${path.resolve(__dirname, "../index.ts")} forget ${tempChainPath} -l bun.lock`,
 				{ stdio: "pipe" },
 			);
+			expect(await hasLockfileInChain(tempChainPath, "bun.lock")).toBe(false);
 
-			// 8. Verify it is tracked again with the new state
-			expect(
-				await hasLockfileInChain(tempChainPath, "mock-package-lock.json"),
-			).toBe(true);
-			const reInitPkgs = await getLatestPackagesForFile(
-				tempChainPath,
-				"mock-package-lock.json",
+			// 8. Test init again with bun.lock (which has been forgotten in Block 1 of the new chain)
+			// It should accept the init, warn that it was forgotten in Block 1, and resume tracking it.
+			const mockBunPath = path.join(__dirname, "bun.lock");
+			await fs.writeFile(
+				mockBunPath,
+				JSON.stringify({
+					lockfileVersion: 3,
+					packages: {
+						"": { dependencies: { lodash: "^4.17.21" } },
+						"node_modules/lodash": { version: "4.17.21" },
+					},
+				}),
+				"utf8",
 			);
-			expect(reInitPkgs).toEqual({ typescript: "4.9.5" });
+			try {
+				const initResult = execSync(
+					`bun run ${path.resolve(__dirname, "../index.ts")} init ${tempChainPath} -l ${mockBunPath} 2>&1`,
+					{ stdio: "pipe", encoding: "utf8" },
+				);
+				expect(initResult).toContain("was forgotten in Block 1");
+				expect(await hasLockfileInChain(tempChainPath, "bun.lock")).toBe(true);
+			} finally {
+				try {
+					await fs.unlink(mockBunPath);
+				} catch {}
+			}
 		} finally {
 			try {
 				await fs.unlink(mockLockfilePath);

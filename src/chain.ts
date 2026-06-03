@@ -645,6 +645,11 @@ export async function findLockfileInitBlock(
 							isTracked = true;
 						} else if (inner.chain_event === "forget") {
 							isTracked = false;
+						} else if (inner.packages) {
+							if (!isTracked) {
+								initBlockIndex = i / 2;
+							}
+							isTracked = true;
 						}
 					}
 				}
@@ -653,6 +658,48 @@ export async function findLockfileInitBlock(
 			}
 		}
 		return isTracked ? initBlockIndex : null;
+	} catch {
+		return null;
+	}
+}
+
+export async function findLockfileForgetBlock(
+	filepath: string,
+	filename: string,
+): Promise<number | null> {
+	try {
+		const fileContent = await fs.readFile(filepath, "utf8");
+		const docs = splitRawDocuments(fileContent);
+		let forgetBlockIndex: number | null = null;
+		let isTracked = false;
+
+		for (let i = 0; i < docs.length; i += 2) {
+			const dataDocStr = docs[i];
+			if (!dataDocStr) continue;
+
+			try {
+				const preprocessed = dataDocStr.replace(/^(\s*)(@[^:]+):/gm, '$1"$2":');
+				const parsed = YAML.parse(preprocessed);
+				if (parsed && typeof parsed === "object" && filename in parsed) {
+					const inner = parsed[filename];
+					if (i === 0) {
+						isTracked = true;
+					} else if (inner && typeof inner === "object") {
+						if (inner.chain_event === "init") {
+							isTracked = true;
+						} else if (inner.chain_event === "forget") {
+							forgetBlockIndex = i / 2;
+							isTracked = false;
+						} else if (inner.packages) {
+							isTracked = true;
+						}
+					}
+				}
+			} catch (e) {
+				// Ignore
+			}
+		}
+		return !isTracked ? forgetBlockIndex : null;
 	} catch {
 		return null;
 	}
