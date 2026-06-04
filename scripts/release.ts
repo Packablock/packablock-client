@@ -246,7 +246,7 @@ for (const file of filesToStage) {
 runGit(["commit", "-m", `chore(release): v${nextVersion} [skip ci]`]);
 console.log("✅ Changes committed.");
 
-runGit(["tag", "-a", `v${nextVersion}`, "-m", `Release v${nextVersion}`]);
+runGit(["tag", "-a", `v${nextVersion}`, "-m", releaseNotes]);
 console.log(`✅ Tag v${nextVersion} created.`);
 
 const branchName = runGit(["branch", "--show-current"]) || "main";
