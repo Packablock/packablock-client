@@ -1092,6 +1092,10 @@ export function createCli(): Command {
 						`----------------------------------------------------------------------------------------------------------------`,
 					);
 
+					const openFusePackages: string[] = [];
+					const techDebtPackages: string[] = [];
+					const upToDatePackages: string[] = [];
+
 					for (const pkg of targetPackages) {
 						const constraint = directDeps[pkg];
 						if (constraint === undefined) continue;
@@ -1111,26 +1115,43 @@ export function createCli(): Command {
 							40,
 						);
 
-						// Highlight specific risks/warnings based on candle metrics
-						let label = "";
 						if (range.max === "infinity") {
-							label = ` ${colors.red}(Open Fuse: >= Risk)${colors.reset}`;
+							openFusePackages.push(pkg);
 						} else if (
 							pinned === range.max ||
 							pinned.startsWith(range.max.replace(/\.x|\.99/g, ""))
 						) {
-							label = ` ${colors.yellow}(Technical Debt Wall)${colors.reset}`;
+							techDebtPackages.push(pkg);
 						} else if (pinned === latest) {
-							label = ` ${colors.green}(Fully Up-To-Date)${colors.reset}`;
+							upToDatePackages.push(pkg);
 						}
 
-						console.log(
-							`${pkg.padEnd(17)} ${constraint.padEnd(11)} ${candle}${label}`,
-						);
+						console.log(`${pkg.padEnd(17)} ${constraint.padEnd(11)} ${candle}`);
 					}
 					console.log(
 						`----------------------------------------------------------------------------------------------------------------\n`,
 					);
+
+					if (openFusePackages.length > 0 || techDebtPackages.length > 0) {
+						console.log(`${colors.bold}Warn:${colors.reset}`);
+						if (openFusePackages.length > 0) {
+							console.log(
+								`  ${colors.red}Open Fuse (>= Risk):${colors.reset} ${openFusePackages.join(", ")}`,
+							);
+						}
+						if (techDebtPackages.length > 0) {
+							console.log(
+								`  ${colors.yellow}Technical Debt Wall:${colors.reset} ${techDebtPackages.join(", ")}`,
+							);
+						}
+						console.log();
+					}
+
+					if (upToDatePackages.length > 0) {
+						console.log(
+							`${colors.bold}Info:${colors.reset}\n  ${colors.green}Fully Up-To-Date:${colors.reset} ${upToDatePackages.join(", ")}\n`,
+						);
+					}
 
 					if (!isPremiumUser) {
 						console.log(
