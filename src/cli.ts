@@ -987,29 +987,108 @@ export function createCli(): Command {
 				// 2. Fetch history lifecycle from local chain
 				const history = await getPackageHistory(resolvedPath);
 
-				// 3. Read constraints from local package.json
-				const packageJsonPath = path.resolve("package.json");
-				let packageJson: any = {};
-				try {
-					const pjsContent = await fs.readFile(packageJsonPath, "utf8");
-					packageJson = JSON.parse(pjsContent);
-				} catch (err: any) {
-					console.error(
-						`\n❌ ${colors.red}${colors.bold}Error reading package.json:${colors.reset} ${err.message}`,
-					);
-					process.exit(1);
+				// 3. Read constraints from all manifest files
+				const targetDir = path.dirname(resolvedPath);
+				const manifestsWithDeps: {
+					relativePath: string;
+					deps: Record<string, string>;
+				}[] = [];
+
+				function parseJsonConstraints(content: string): Record<string, string> {
+					const constraints: Record<string, string> = {};
+					try {
+						const parsed = JSON.parse(content);
+						const depKeys = [
+							"dependencies",
+							"devDependencies",
+							"peerDependencies",
+						];
+						for (const key of depKeys) {
+							if (parsed[key] && typeof parsed[key] === "object") {
+								for (const [name, constraint] of Object.entries(parsed[key])) {
+									if (typeof constraint === "string") {
+										constraints[name] = constraint;
+									}
+								}
+							}
+						}
+					} catch {}
+					return constraints;
 				}
 
-				const directDeps = {
-					...packageJson.dependencies,
-					...packageJson.devDependencies,
-					...packageJson.peerDependencies,
-				};
+				function parseTomlConstraints(content: string): Record<string, string> {
+					const constraints: Record<string, string> = {};
+					const depBlocks =
+						content.match(
+							/\[(?:workspace\.)?dependencies\][\s\S]*?(?=(?:\[|$))/g,
+						) || [];
+					for (const block of depBlocks) {
+						const lines = block.split("\n");
+						for (const line of lines) {
+							if (!line) continue;
+							const splitLine = line.split("#")[0];
+							const cleanLine = (splitLine || "").trim();
+							const m = cleanLine.match(/^\s*([a-zA-Z0-9_-]+)\s*=\s*(.*)/);
+							if (m && m[1] && m[2]) {
+								const name = m[1].trim();
+								let val = m[2].trim();
+								if (val.startsWith('"') && val.endsWith('"')) {
+									val = val.substring(1, val.length - 1);
+								} else if (val.startsWith("'") && val.endsWith("'")) {
+									val = val.substring(1, val.length - 1);
+								} else if (val.startsWith("{") && val.endsWith("}")) {
+									const verMatch = val.match(/version\s*=\s*["']([^"']+)["']/);
+									if (verMatch?.[1]) {
+										val = verMatch[1];
+									} else {
+										continue;
+									}
+								}
+								if (val.includes("path =") || val.startsWith("{")) {
+									continue;
+								}
+								constraints[name] = val;
+							}
+						}
+					}
+					return constraints;
+				}
 
-				const targetPackages = Object.keys(directDeps);
-				const localLockfilePackages = await getLocalPinnedVersions();
+				const manifestFiles = [
+					{ relativePath: "package.json", type: "json" },
+					{ relativePath: "Cargo.toml", type: "toml" },
+					{ relativePath: "bunfig.toml", type: "toml" },
+					{ relativePath: "tsconfig.json", type: "json" },
+					{ relativePath: "packages/bun-types/package.json", type: "json" },
+					{ relativePath: "packages/@types/bun/package.json", type: "json" },
+				];
 
-				if (targetPackages.length === 0) {
+				for (const fileSpec of manifestFiles) {
+					const filePath = path.resolve(targetDir, fileSpec.relativePath);
+					try {
+						const exists = await fs
+							.access(filePath)
+							.then(() => true)
+							.catch(() => false);
+						if (exists) {
+							const content = await fs.readFile(filePath, "utf8");
+							const fileConstraints =
+								fileSpec.type === "json"
+									? parseJsonConstraints(content)
+									: parseTomlConstraints(content);
+							if (Object.keys(fileConstraints).length > 0) {
+								manifestsWithDeps.push({
+									relativePath: fileSpec.relativePath,
+									deps: fileConstraints,
+								});
+							}
+						}
+					} catch {
+						// Ignore individual read errors to remain robust
+					}
+				}
+
+				if (manifestsWithDeps.length === 0) {
 					console.log(
 						`\n🔍 ${colors.bold}Packablock Supply Chain Velocity Audit${colors.reset}`,
 					);
@@ -1019,6 +1098,15 @@ export function createCli(): Command {
 					);
 					return;
 				}
+
+				const allUniquePackages = new Set<string>();
+				for (const m of manifestsWithDeps) {
+					for (const pkg of Object.keys(m.deps)) {
+						allUniquePackages.add(pkg);
+					}
+				}
+				const targetPackages = Array.from(allUniquePackages);
+				const localLockfilePackages = await getLocalPinnedVersions();
 
 				// 4. Query registry server for latest upstream versions if --visualize is requested
 				let latestUpstreamVersions: Record<string, string> = {};
@@ -1108,95 +1196,139 @@ export function createCli(): Command {
 					);
 					console.log(`  ► : Extension to Infinity (>=)\n`);
 
-					console.log(
-						`-------------------------------------------------------------------------------------------------------------------------`,
-					);
-					console.log(
-						`Package Name      Tracked  Constraint  Version Timeline (Low -> Installed -> Upstream -> Max)`,
-					);
-					console.log(
-						`-------------------------------------------------------------------------------------------------------------------------`,
-					);
-
 					const openFusePackages: string[] = [];
 					const techDebtPackages: string[] = [];
 					const upToDatePackages: string[] = [];
 
-					for (const pkg of targetPackages) {
-						const constraint = directDeps[pkg];
-						if (constraint === undefined) continue;
-						const pkgHist = history[pkg];
-						let first = "";
-						let pinned = "";
-						if (pkgHist) {
-							first = pkgHist.firstSeen;
-							pinned = pkgHist.currentPinned;
-						} else {
-							pinned =
-								localLockfilePackages[pkg] ||
-								constraint
-									.replace(/^[\^~>=<]+/g, "")
-									.replace(/\.x$/g, ".0")
-									.trim();
-							if (!/^\d+\.\d+\.\d+/.test(pinned)) {
-								pinned = "0.0.0";
-							}
-							first = pinned;
-						}
-						const latest = latestUpstreamVersions[pkg] || pinned; // fallback to pinned if not found
-
-						const range = parseSemVerConstraint(constraint, pinned);
-						const candle = renderCandle(
-							range.min,
-							first,
-							pinned,
-							latest,
-							range.max,
-							40,
-						);
-
-						if (range.max === "infinity") {
-							openFusePackages.push(pkg);
-						} else if (
-							pinned === range.max ||
-							pinned.startsWith(range.max.replace(/\.x|\.99/g, ""))
-						) {
-							techDebtPackages.push(pkg);
-						} else if (pinned === latest) {
-							upToDatePackages.push(pkg);
-						}
-
-						const trackedStr = pkgHist ? "Yes" : "No";
-						const coloredTracked = pkgHist
-							? `${colors.green}${trackedStr.padEnd(8)}${colors.reset}`
-							: `${colors.red}${trackedStr.padEnd(8)}${colors.reset}`;
-
-						console.log(
-							`${pkg.padEnd(17)} ${coloredTracked} ${constraint.padEnd(11)} ${candle}`,
-						);
+					const DEFAULT_WIDTH = 80;
+					let termWidth = process.stdout.columns || DEFAULT_WIDTH;
+					if (termWidth <= 0) {
+						termWidth = DEFAULT_WIDTH;
 					}
-					console.log(
-						`-------------------------------------------------------------------------------------------------------------------------\n`,
+					// Clamp width between 60 and 120 columns for readability
+					termWidth = Math.max(60, Math.min(120, termWidth));
+
+					const prefixWidth = 39;
+					const candleWidth = termWidth - prefixWidth;
+
+					let timelineHeader = "Timeline (Low -> Pinned -> Upstream -> Max)";
+					if (candleWidth < timelineHeader.length) {
+						if (candleWidth >= 30) {
+							timelineHeader = "Timeline (Low->Pin->Up->Max)";
+						} else {
+							timelineHeader = "Timeline";
+						}
+					}
+
+					const separator = "-".repeat(prefixWidth + candleWidth);
+					for (const manifest of manifestsWithDeps) {
+						console.log(
+							`### Manifest: ${colors.cyan}${manifest.relativePath}${colors.reset}`,
+						);
+						console.log(separator);
+						console.log(
+							`${"Package Name".padEnd(17)} ${"Tracked".padEnd(8)} ${"Constraint".padEnd(11)} ${timelineHeader}`,
+						);
+						console.log(separator);
+
+						for (const [pkg, constraint] of Object.entries(manifest.deps)) {
+							const pkgHist = history[pkg];
+							let first = "";
+							let pinned = "";
+							if (pkgHist) {
+								first = pkgHist.firstSeen;
+								pinned = pkgHist.currentPinned;
+							} else {
+								pinned =
+									localLockfilePackages[pkg] ||
+									constraint
+										.replace(/^[\^~>=<]+/g, "")
+										.replace(/\.x$/g, ".0")
+										.trim();
+								if (!/^\d+\.\d+\.\d+/.test(pinned)) {
+									pinned = "0.0.0";
+								}
+								first = pinned;
+							}
+							const latest = latestUpstreamVersions[pkg] || pinned; // fallback to pinned if not found
+
+							const range = parseSemVerConstraint(constraint, pinned);
+							const candle = renderCandle(
+								range.min,
+								first,
+								pinned,
+								latest,
+								range.max,
+								candleWidth,
+							);
+
+							if (range.max === "infinity") {
+								openFusePackages.push(pkg);
+							} else if (
+								pinned === range.max ||
+								pinned.startsWith(range.max.replace(/\.x|\.99/g, ""))
+							) {
+								techDebtPackages.push(pkg);
+							} else if (pinned === latest) {
+								upToDatePackages.push(pkg);
+							}
+
+							const trackedStr = pkgHist ? "Yes" : "No";
+							const coloredTracked = pkgHist
+								? `${colors.green}${trackedStr.padEnd(8)}${colors.reset}`
+								: `${colors.red}${trackedStr.padEnd(8)}${colors.reset}`;
+
+							if (pkg.length <= 17 && constraint.length <= 11) {
+								console.log(
+									`${pkg.padEnd(17)} ${coloredTracked} ${constraint.padEnd(11)} ${candle}`,
+								);
+							} else if (pkg.length > 17 && constraint.length <= 11) {
+								console.log(pkg);
+								console.log(
+									`${"".padEnd(17)} ${coloredTracked} ${constraint.padEnd(11)} ${candle}`,
+								);
+							} else if (pkg.length <= 17 && constraint.length > 11) {
+								console.log(
+									`${pkg.padEnd(17)} ${coloredTracked} ${constraint}`,
+								);
+								console.log(
+									`${"".padEnd(17)} ${"".padEnd(8)} ${"".padEnd(11)} ${candle}`,
+								);
+							} else {
+								console.log(pkg);
+								console.log(`${"".padEnd(17)} ${coloredTracked} ${constraint}`);
+								console.log(
+									`${"".padEnd(17)} ${"".padEnd(8)} ${"".padEnd(11)} ${candle}`,
+								);
+							}
+						}
+						console.log(`${separator}\n`);
+					}
+
+					const uniqueOpenFuse = Array.from(new Set(openFusePackages));
+					const uniqueTechDebt = Array.from(new Set(techDebtPackages));
+					const uniqueUpToDate = Array.from(new Set(upToDatePackages)).filter(
+						(p) => !uniqueOpenFuse.includes(p) && !uniqueTechDebt.includes(p),
 					);
 
-					if (openFusePackages.length > 0 || techDebtPackages.length > 0) {
+					if (uniqueOpenFuse.length > 0 || uniqueTechDebt.length > 0) {
 						console.log(`${colors.bold}Warn:${colors.reset}`);
-						if (openFusePackages.length > 0) {
+						if (uniqueOpenFuse.length > 0) {
 							console.log(
-								`  ${colors.red}Open Fuse (>= Risk):${colors.reset} ${openFusePackages.join(", ")}`,
+								`  ${colors.red}Open Fuse (>= Risk):${colors.reset} ${uniqueOpenFuse.join(", ")}`,
 							);
 						}
-						if (techDebtPackages.length > 0) {
+						if (uniqueTechDebt.length > 0) {
 							console.log(
-								`  ${colors.yellow}Technical Debt Wall:${colors.reset} ${techDebtPackages.join(", ")}`,
+								`  ${colors.yellow}Technical Debt Wall:${colors.reset} ${uniqueTechDebt.join(", ")}`,
 							);
 						}
 						console.log();
 					}
 
-					if (upToDatePackages.length > 0) {
+					if (uniqueUpToDate.length > 0) {
 						console.log(
-							`${colors.bold}Info:${colors.reset}\n  ${colors.green}Fully Up-To-Date:${colors.reset} ${upToDatePackages.join(", ")}\n`,
+							`${colors.bold}Info:${colors.reset}\n  ${colors.green}Fully Up-To-Date:${colors.reset} ${uniqueUpToDate.join(", ")}\n`,
 						);
 					}
 
@@ -1207,44 +1339,51 @@ export function createCli(): Command {
 					}
 				} else {
 					// Standard check run without --visualize
-					const tracked: string[] = [];
-					const untracked: string[] = [];
-					for (const pkg of targetPackages) {
-						const pkgHist = history[pkg];
-						if (pkgHist) {
-							tracked.push(pkg);
-						} else {
-							untracked.push(pkg);
+					for (const manifest of manifestsWithDeps) {
+						console.log(
+							`Manifest: ${colors.cyan}${manifest.relativePath}${colors.reset}`,
+						);
+						const tracked: string[] = [];
+						const untracked: string[] = [];
+						for (const pkg of Object.keys(manifest.deps)) {
+							const pkgHist = history[pkg];
+							if (pkgHist) {
+								tracked.push(pkg);
+							} else {
+								untracked.push(pkg);
+							}
 						}
-					}
 
-					console.log(`${colors.bold}Tracked Dependencies:${colors.reset}`);
-					for (const pkg of tracked) {
-						const constraint = directDeps[pkg];
-						if (constraint === undefined) continue;
-						const pinned = history[pkg]!.currentPinned;
-						console.log(
-							`  * ${colors.green}${pkg}${colors.reset} (pinned to ${pinned}, constraint is ${constraint})`,
-						);
-					}
-					console.log();
-
-					if (untracked.length > 0) {
-						console.log(
-							`${colors.bold}Untracked Dependencies (Not in ledger chain):${colors.reset}`,
-						);
-						for (const pkg of untracked) {
-							const constraint = directDeps[pkg];
+						console.log(`  ${colors.bold}Tracked Dependencies:${colors.reset}`);
+						if (tracked.length === 0) {
+							console.log(`    (none)`);
+						}
+						for (const pkg of tracked) {
+							const constraint = manifest.deps[pkg];
 							if (constraint === undefined) continue;
-							const pinned =
-								localLockfilePackages[pkg] ||
-								constraint
-									.replace(/^[\^~>=<]+/g, "")
-									.replace(/\.x$/g, ".0")
-									.trim();
+							const pinned = history[pkg]!.currentPinned;
 							console.log(
-								`  * ${colors.red}${pkg}${colors.reset} (pinned to ${pinned}, constraint is ${constraint}) ${colors.yellow}[UNTRACKED]${colors.reset}`,
+								`    * ${colors.green}${pkg}${colors.reset} (pinned to ${pinned}, constraint is ${constraint})`,
 							);
+						}
+
+						if (untracked.length > 0) {
+							console.log(
+								`  ${colors.bold}Untracked Dependencies (Not in ledger chain):${colors.reset}`,
+							);
+							for (const pkg of untracked) {
+								const constraint = manifest.deps[pkg];
+								if (constraint === undefined) continue;
+								const pinned =
+									localLockfilePackages[pkg] ||
+									constraint
+										.replace(/^[\^~>=<]+/g, "")
+										.replace(/\.x$/g, ".0")
+										.trim();
+								console.log(
+									`    * ${colors.red}${pkg}${colors.reset} (pinned to ${pinned}, constraint is ${constraint}) ${colors.yellow}[UNTRACKED]${colors.reset}`,
+								);
+							}
 						}
 						console.log();
 					}

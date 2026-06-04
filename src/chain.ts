@@ -355,7 +355,7 @@ export async function verifyChain(
 						return blockReport;
 					}
 
-					expectedPrevHash = blockReport.metaHash!;
+					expectedPrevHash = blockReport.metaHash || "";
 					blockIndex++;
 					isDataDoc = true;
 				}
@@ -770,6 +770,7 @@ export async function hasLockfileInChain(
 
 export async function getLatestConstraints(
 	filepath: string,
+	filename = "package.json",
 ): Promise<Record<string, string>> {
 	const currentConstraints: Record<string, string> = {};
 	try {
@@ -780,8 +781,9 @@ export async function getLatestConstraints(
 			const dataDocStr = docs[i];
 			if (!dataDocStr) continue;
 			try {
-				const parsed = YAML.parse(dataDocStr);
-				const pkgJson = parsed?.["package.json"];
+				const preprocessed = dataDocStr.replace(/^(\s*)(@[^:]+):/gm, '$1"$2":');
+				const parsed = YAML.parse(preprocessed);
+				const pkgJson = parsed?.[filename];
 				if (pkgJson && typeof pkgJson === "object") {
 					if (pkgJson.chain_event === "init") {
 						for (const k of Object.keys(currentConstraints)) {
@@ -894,6 +896,19 @@ export async function getPackageHistory(
 	const history: Record<string, { firstSeen: string; currentPinned: string }> =
 		{};
 
+	// Helper to extract clean version
+	const cleanVersion = (val: any): string => {
+		const str = String(val);
+		const m = str.match(/version\s*=\s*["']([^"']+)["']/);
+		if (m && m[1]) {
+			return m[1];
+		}
+		return str
+			.replace(/^[\^~>=<]+/g, "")
+			.replace(/\.x$/g, ".0")
+			.trim();
+	};
+
 	// Iterate through even indexes (data docs)
 	for (let i = 0; i < docs.length; i += 2) {
 		const dataDocStr = docs[i];
@@ -904,6 +919,74 @@ export async function getPackageHistory(
 			const parsed = YAML.parse(preprocessed);
 
 			if (parsed && typeof parsed === "object") {
+				const processList = (list: any[]) => {
+					if (!Array.isArray(list) || list.length === 0) return;
+
+					// Detect if this is a diff list or genesis list
+					let isDiff = false;
+					const firstItem = list[0];
+					if (firstItem && typeof firstItem === "object") {
+						const values = Object.values(firstItem);
+						if (values.length > 0 && Array.isArray(values[0])) {
+							isDiff = true;
+						}
+					}
+
+					if (!isDiff) {
+						// Genesis/Init Block
+						for (const item of list) {
+							if (item && typeof item === "object") {
+								for (const [name, ver] of Object.entries(item)) {
+									const cleanVer = cleanVersion(ver);
+									if (!history[name]) {
+										history[name] = {
+											firstSeen: cleanVer,
+											currentPinned: cleanVer,
+										};
+									} else {
+										history[name].currentPinned = cleanVer;
+									}
+								}
+							}
+						}
+					} else {
+						// Diff Block
+						for (const item of list) {
+							if (item && typeof item === "object") {
+								for (const [name, ops] of Object.entries(item)) {
+									if (Array.isArray(ops)) {
+										let isRemoved = false;
+										let newVer = "";
+										for (const op of ops) {
+											if (op && typeof op === "object") {
+												if (op.msg === "removed") {
+													isRemoved = true;
+												}
+												if (op.new !== undefined) {
+													newVer = cleanVersion(op.new);
+												}
+											}
+										}
+										if (isRemoved) {
+											delete history[name];
+										} else if (newVer) {
+											if (!history[name]) {
+												history[name] = {
+													firstSeen: newVer,
+													currentPinned: newVer,
+												};
+											} else {
+												history[name].currentPinned = newVer;
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				};
+
+				// 1. Process Lockfiles
 				let parsedLockfiles: Record<string, any> = {};
 				if (parsed.lockfiles && typeof parsed.lockfiles === "object") {
 					parsedLockfiles = parsed.lockfiles;
@@ -912,86 +995,30 @@ export async function getPackageHistory(
 				}
 				for (const val of Object.values<any>(parsedLockfiles)) {
 					if (val && typeof val === "object" && val.packages) {
-						if (Array.isArray(val.packages)) {
-							const firstItem = val.packages[0];
-							let isDiff = false;
-							if (firstItem && typeof firstItem === "object") {
-								const values = Object.values(firstItem);
-								if (values.length > 0 && Array.isArray(values[0])) {
-									isDiff = true;
-								}
-							}
+						processList(val.packages);
+					}
+				}
 
-							if (!isDiff) {
-								// Genesis Block
-								const newKeys = new Set<string>();
-								for (const item of val.packages) {
-									if (item && typeof item === "object") {
-										for (const name of Object.keys(item)) {
-											newKeys.add(name);
-										}
-									}
-								}
-								for (const name of Object.keys(history)) {
-									if (!newKeys.has(name)) {
-										delete history[name];
-									}
-								}
-
-								for (const item of val.packages) {
-									if (item && typeof item === "object") {
-										for (const [name, ver] of Object.entries(item)) {
-											const cleanVer = String(ver);
-											if (!history[name]) {
-												history[name] = {
-													firstSeen: cleanVer,
-													currentPinned: cleanVer,
-												};
-											} else {
-												history[name].currentPinned = cleanVer;
-											}
-										}
-									}
-								}
-							} else {
-								// Diff Block
-								for (const item of val.packages) {
-									if (item && typeof item === "object") {
-										for (const [name, ops] of Object.entries(item)) {
-											if (Array.isArray(ops)) {
-												let isRemoved = false;
-												let newVer = "";
-												for (const op of ops) {
-													if (op && typeof op === "object") {
-														if (op.msg === "removed") {
-															isRemoved = true;
-														}
-														if (op.new !== undefined) {
-															newVer = String(op.new);
-														}
-													}
-												}
-												if (isRemoved) {
-													delete history[name];
-												} else if (newVer) {
-													if (!history[name]) {
-														history[name] = {
-															firstSeen: newVer,
-															currentPinned: newVer,
-														};
-													} else {
-														history[name].currentPinned = newVer;
-													}
-												}
-											}
-										}
-									}
-								}
-							}
-						}
+				// 2. Process Manifest Constraints
+				const manifestKeys = [
+					"package.json",
+					"Cargo.toml",
+					"bunfig.toml",
+					"tsconfig.json",
+					"packages/bun-types/package.json",
+					"packages/@types/bun/package.json",
+				];
+				for (const key of manifestKeys) {
+					if (
+						parsed[key] &&
+						typeof parsed[key] === "object" &&
+						parsed[key].constraints
+					) {
+						processList(parsed[key].constraints);
 					}
 				}
 			}
+
 			if (parsed?.packages && !Array.isArray(parsed.packages)) {
 				// Old format backward compatibility
 				for (const name of Object.keys(history)) {
@@ -1125,14 +1152,46 @@ export async function rolloverChain(
 			})),
 		};
 	}
-	const currentConstraints = await getLatestConstraints(resolvedPath);
-	if (Object.keys(currentConstraints).length > 0) {
-		rolloverDataObj["package.json"] = {
-			chain_event: "init",
-			constraints: Object.entries(currentConstraints).map(([name, val]) => ({
-				[name]: val,
-			})),
-		};
+	const manifestKeys = new Set<string>();
+	manifestKeys.add("package.json"); // always default
+	for (let i = 0; i < docs.length; i += 2) {
+		const dataDocStr = docs[i];
+		if (!dataDocStr) continue;
+		try {
+			const preprocessed = dataDocStr.replace(/^(\s*)(@[^:]+):/gm, '$1"$2":');
+			const parsed = YAML.parse(preprocessed);
+			if (parsed && typeof parsed === "object") {
+				for (const [key, val] of Object.entries(parsed)) {
+					if (
+						key !== "lockfiles" &&
+						key !== "$yaml-chain-meta" &&
+						key !== "genesis_rollover" &&
+						key !== "rotated_at" &&
+						key !== "previous_chain_hash" &&
+						val &&
+						typeof val === "object" &&
+						(val as any).constraints
+					) {
+						manifestKeys.add(key);
+					}
+				}
+			}
+		} catch {}
+	}
+
+	for (const manifestKey of manifestKeys) {
+		const currentConstraints = await getLatestConstraints(
+			resolvedPath,
+			manifestKey,
+		);
+		if (Object.keys(currentConstraints).length > 0) {
+			rolloverDataObj[manifestKey] = {
+				chain_event: "init",
+				constraints: Object.entries(currentConstraints).map(([name, val]) => ({
+					[name]: val,
+				})),
+			};
+		}
 	}
 	const rolloverData = YAML.stringify(rolloverDataObj);
 
