@@ -1,32 +1,32 @@
 {
-  "name": "packablock-client",
-  "version": "1.1.0",
-  "module": "index.ts",
-  "type": "module",
-  "bin": {
-    "pblk": "./index.ts"
-  },
-  "scripts": {
-    "start": "bun run index.ts",
-    "test": "bun test",
-    "typecheck": "tsc --noEmit",
-    "lint": "biome lint .",
-    "format:check": "biome format .",
-    "format:write": "biome format --write .",
-    "release": "bun run scripts/release.ts",
-    "check-all": "bun run typecheck && bun run lint && bun run format:check && bun run test"
-  },
-  "private": true,
-  "devDependencies": {
-    "@biomejs/biome": "2.4.16",
-    "@types/bun": "latest",
-    "typescript": "^5.5.0"
-  },
-  "peerDependencies": {
-    "typescript": "^5"
-  },
-  "dependencies": {
-    "commander": "^15.0.0",
-    "yaml": "^2.9.0"
-  }
+	"name": "packablock-client",
+	"version": "1.1.0",
+	"module": "index.ts",
+	"type": "module",
+	"bin": {
+		"pblk": "./index.ts"
+	},
+	"scripts": {
+		"start": "bun run index.ts",
+		"test": "bun test",
+		"typecheck": "tsc --noEmit",
+		"lint": "biome lint .",
+		"format:check": "biome format .",
+		"format:write": "biome format --write .",
+		"release": "bun run scripts/release.ts",
+		"check-all": "bun run typecheck && bun run lint && bun run format:check && bun run test"
+	},
+	"private": true,
+	"devDependencies": {
+		"@biomejs/biome": "2.4.16",
+		"@types/bun": "latest",
+		"typescript": "^5.5.0"
+	},
+	"peerDependencies": {
+		"typescript": "^5"
+	},
+	"dependencies": {
+		"commander": "^15.0.0",
+		"yaml": "^2.9.0"
+	}
 }
