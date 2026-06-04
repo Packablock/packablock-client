@@ -125,7 +125,9 @@ describe("Git History Replay Ingestion Tests", () => {
 			{ lodash: "4.17.21" },
 		]);
 		expect(block0Meta.block_index).toBe(0);
-		expect(block0Meta.timestamp).toBe("2026-01-01T12:00:00+00:00");
+		expect(new Date(block0Meta.timestamp).toISOString()).toBe(
+			"2026-01-01T12:00:00.000Z",
+		);
 
 		// Assert Block 1 (Commit 2)
 		expect(block1Data.lockfiles["bun.lock"].packages).toBeDefined();
@@ -137,6 +139,8 @@ describe("Git History Replay Ingestion Tests", () => {
 			/^1,\d+$/,
 		);
 		expect(block1Meta.block_index).toBe(1);
-		expect(block1Meta.timestamp).toBe("2026-01-02T12:00:00+00:00");
+		expect(new Date(block1Meta.timestamp).toISOString()).toBe(
+			"2026-01-02T12:00:00.000Z",
+		);
 	});
 });
