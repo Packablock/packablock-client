@@ -70,6 +70,33 @@ async function fetchLatestPublicVersion(
 	}
 }
 
+async function getLocalPinnedVersions(): Promise<Record<string, string>> {
+	const possibleLockfiles = [
+		"bun.lockb",
+		"bun.lock",
+		"package-lock.json",
+		"yarn.lock",
+		"pnpm-lock.yaml",
+	];
+	const localPackages: Record<string, string> = {};
+	for (const f of possibleLockfiles) {
+		try {
+			const resolved = path.resolve(f);
+			const exists = await fs
+				.access(resolved)
+				.then(() => true)
+				.catch(() => false);
+			if (exists) {
+				const parsed = parseLockfiles([resolved]);
+				if (parsed && parsed.packages) {
+					Object.assign(localPackages, parsed.packages);
+				}
+			}
+		} catch {}
+	}
+	return localPackages;
+}
+
 const logo = `
 ${colors.bold}${colors.cyan}  _____             _         ${colors.magenta}____  _            _      
 ${colors.bold}${colors.cyan} |  __ \\           | |       ${colors.magenta}|  _ \\| |          | |     
@@ -979,9 +1006,7 @@ export function createCli(): Command {
 					...packageJson.peerDependencies,
 				};
 
-				const targetPackages = Object.keys(directDeps).filter(
-					(pkgName) => history[pkgName] !== undefined,
-				);
+				const targetPackages = Object.keys(directDeps);
 
 				if (targetPackages.length === 0) {
 					console.log(
@@ -1096,13 +1121,29 @@ export function createCli(): Command {
 					const techDebtPackages: string[] = [];
 					const upToDatePackages: string[] = [];
 
+					const localLockfilePackages = await getLocalPinnedVersions();
+
 					for (const pkg of targetPackages) {
 						const constraint = directDeps[pkg];
 						if (constraint === undefined) continue;
 						const pkgHist = history[pkg];
-						if (!pkgHist) continue;
-						const first = pkgHist.firstSeen;
-						const pinned = pkgHist.currentPinned;
+						let first = "";
+						let pinned = "";
+						if (pkgHist) {
+							first = pkgHist.firstSeen;
+							pinned = pkgHist.currentPinned;
+						} else {
+							pinned =
+								localLockfilePackages[pkg] ||
+								constraint
+									.replace(/^[\^~>=<]+/g, "")
+									.replace(/\.x$/g, ".0")
+									.trim();
+							if (!/^\d+\.\d+\.\d+/.test(pinned)) {
+								pinned = "0.0.0";
+							}
+							first = pinned;
+						}
 						const latest = latestUpstreamVersions[pkg] || pinned; // fallback to pinned if not found
 
 						const range = parseSemVerConstraint(constraint, pinned);
