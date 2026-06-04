@@ -1,7 +1,8 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, beforeAll, afterAll } from "bun:test";
 import path from "node:path";
+import fs from "node:fs";
 import { computeDiff } from "../src/diff.js";
-import { parseLockfiles } from "../src/lockfile.js";
+import { parseLockfiles, readPackageJsonConstraints } from "../src/lockfile.js";
 
 describe("Lockfile Parser & Diff Tests", () => {
 	const fixturesDir = path.resolve(__dirname, "fixtures");
@@ -96,6 +97,57 @@ describe("Lockfile Parser & Diff Tests", () => {
 			expect(result.packages["esbuild"]).toBe("0.21.5");
 			expect(result.packages["typescript"]).toBe("6.0.2");
 			expect(result.source).toBe("bun.lock");
+		});
+	});
+
+	describe("readPackageJsonConstraints", () => {
+		const tempDir = path.resolve(__dirname, "temp-test");
+		const tempLockfile = path.join(tempDir, "bun.lockb");
+		const tempPkgJson = path.join(tempDir, "package.json");
+
+		beforeAll(() => {
+			if (!fs.existsSync(tempDir)) {
+				fs.mkdirSync(tempDir, { recursive: true });
+			}
+		});
+
+		afterAll(() => {
+			if (fs.existsSync(tempPkgJson)) fs.unlinkSync(tempPkgJson);
+			if (fs.existsSync(tempLockfile)) fs.unlinkSync(tempLockfile);
+			if (fs.existsSync(tempDir)) fs.rmdirSync(tempDir);
+		});
+
+		it("should return null if package.json does not exist", () => {
+			const res = readPackageJsonConstraints(tempLockfile);
+			expect(res).toBeNull();
+		});
+
+		it("should return null if package.json is empty or invalid JSON", () => {
+			fs.writeFileSync(tempPkgJson, "{invalid}");
+			const res = readPackageJsonConstraints(tempLockfile);
+			expect(res).toBeNull();
+		});
+
+		it("should parse and return constraints from package.json", () => {
+			const pkgObj = {
+				dependencies: {
+					lodash: "^4.17.21",
+				},
+				devDependencies: {
+					typescript: "~5.1.0",
+				},
+				peerDependencies: {
+					react: ">=18.0.0",
+				},
+			};
+			fs.writeFileSync(tempPkgJson, JSON.stringify(pkgObj));
+			const res = readPackageJsonConstraints(tempLockfile);
+			expect(res).not.toBeNull();
+			expect(res).toEqual([
+				{ lodash: "^4.17.21" },
+				{ typescript: "~5.1.0" },
+				{ react: ">=18.0.0" },
+			]);
 		});
 	});
 });
