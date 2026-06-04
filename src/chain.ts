@@ -768,6 +768,62 @@ export async function hasLockfileInChain(
 	return block !== null;
 }
 
+export async function getLatestConstraints(
+	filepath: string,
+): Promise<Record<string, string>> {
+	const currentConstraints: Record<string, string> = {};
+	try {
+		const fileContent = await fs.readFile(filepath, "utf8");
+		const docs = splitRawDocuments(fileContent);
+
+		for (let i = 0; i < docs.length; i += 2) {
+			const dataDocStr = docs[i];
+			if (!dataDocStr) continue;
+			try {
+				const parsed = YAML.parse(dataDocStr);
+				const pkgJson = parsed?.["package.json"];
+				if (pkgJson && typeof pkgJson === "object") {
+					if (pkgJson.chain_event === "init") {
+						for (const k of Object.keys(currentConstraints)) {
+							delete currentConstraints[k];
+						}
+					}
+					if (Array.isArray(pkgJson.constraints)) {
+						for (const item of pkgJson.constraints) {
+							if (item && typeof item === "object") {
+								for (const [name, val] of Object.entries(item)) {
+									if (typeof val === "string") {
+										currentConstraints[name] = val;
+									} else if (Array.isArray(val)) {
+										let isRemoved = false;
+										let newConstraint = "";
+										for (const op of val) {
+											if (op && typeof op === "object") {
+												if (op.msg === "removed") {
+													isRemoved = true;
+												}
+												if (op.new !== undefined) {
+													newConstraint = String(op.new);
+												}
+											}
+										}
+										if (isRemoved) {
+											delete currentConstraints[name];
+										} else if (newConstraint) {
+											currentConstraints[name] = newConstraint;
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			} catch {}
+		}
+	} catch {}
+	return currentConstraints;
+}
+
 export async function getLatestPackages(
 	filepath: string,
 ): Promise<Record<string, string>> {
@@ -1060,6 +1116,15 @@ export async function rolloverChain(
 		rolloverDataObj[filenameKey] = {
 			packages: Object.entries(pkgs).map(([name, ver]) => ({
 				[name]: ver,
+			})),
+		};
+	}
+	const currentConstraints = await getLatestConstraints(resolvedPath);
+	if (Object.keys(currentConstraints).length > 0) {
+		rolloverDataObj["package.json"] = {
+			chain_event: "init",
+			constraints: Object.entries(currentConstraints).map(([name, val]) => ({
+				[name]: val,
 			})),
 		};
 	}
