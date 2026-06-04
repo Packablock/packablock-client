@@ -49,6 +49,27 @@ const colors = {
 	gray: "\x1b[90m",
 };
 
+async function fetchLatestPublicVersion(
+	pkgName: string,
+): Promise<string | null> {
+	const controller = new AbortController();
+	const timeout = setTimeout(() => controller.abort(), 1000);
+	try {
+		const res = await fetch(`https://registry.npmjs.org/${pkgName}/latest`, {
+			signal: controller.signal,
+		});
+		if (res.ok) {
+			const data = (await res.json()) as any;
+			return data?.version || null;
+		}
+		return null;
+	} catch {
+		return null;
+	} finally {
+		clearTimeout(timeout);
+	}
+}
+
 const logo = `
 ${colors.bold}${colors.cyan}  _____             _         ${colors.magenta}____  _            _      
 ${colors.bold}${colors.cyan} |  __ \\           | |       ${colors.magenta}|  _ \\| |          | |     
@@ -1026,6 +1047,17 @@ export function createCli(): Command {
 						// Server offline or connection error
 						isPremiumUser = false;
 					}
+
+					if (!isPremiumUser) {
+						// Fetch from public npm registry in parallel for all targetPackages
+						const promises = targetPackages.map(async (pkg) => {
+							const ver = await fetchLatestPublicVersion(pkg);
+							if (ver) {
+								latestUpstreamVersions[pkg] = ver;
+							}
+						});
+						await Promise.all(promises);
+					}
 				}
 
 				// 5. Output Audit Header
@@ -1039,45 +1071,7 @@ export function createCli(): Command {
 					`Status: ${colors.green}${colors.bold}SECURELY ANCHORED (${status.blockCount} Blocks Aligned)${colors.reset}\n`,
 				);
 
-				if (isVisualizing && !isPremiumUser) {
-					console.log(
-						`${colors.yellow}⭐ Premium Feature: Upstream drift analysis and SemVer Candle visualization are only available to paying customers of the hosted Packablock Registry.${colors.reset}`,
-					);
-					console.log(
-						`To unlock, subscribe at ${colors.bold}https://packablock.com/pricing${colors.reset} or authenticate using '${colors.bold}pblk login${colors.reset}'.\n`,
-					);
-
-					// Print simplified non-premium summary (names and current/first seen versions)
-					console.log(
-						`${colors.bold}Tracked Dependencies Summary:${colors.reset}`,
-					);
-					console.log(
-						`----------------------------------------------------------------------------`,
-					);
-					console.log(
-						`Package Name      Constraint  First Seen  Current Pinned`,
-					);
-					console.log(
-						`----------------------------------------------------------------------------`,
-					);
-					for (const pkg of targetPackages) {
-						const constraint = directDeps[pkg];
-						if (constraint === undefined) continue;
-						const pkgHist = history[pkg];
-						if (!pkgHist) continue;
-						const first = pkgHist.firstSeen;
-						const pinned = pkgHist.currentPinned;
-						console.log(
-							`${pkg.padEnd(18)} ${constraint.padEnd(11)} ${first.padEnd(11)} ${pinned}`,
-						);
-					}
-					console.log(
-						`----------------------------------------------------------------------------\n`,
-					);
-					return;
-				}
-
-				if (isVisualizing && isPremiumUser) {
+				if (isVisualizing) {
 					console.log(`## SemVer Candle Analysis (Lockfile Lifecycle)`);
 					console.log(`Legend:`);
 					console.log(
@@ -1137,6 +1131,12 @@ export function createCli(): Command {
 					console.log(
 						`----------------------------------------------------------------------------------------------------------------\n`,
 					);
+
+					if (!isPremiumUser) {
+						console.log(
+							`${colors.yellow}Tip: Register this log to a Packablock registry to enable automated enterprise security policies and webhook alerts.${colors.reset}\n`,
+						);
+					}
 				} else {
 					// Standard check run without --visualize
 					console.log(`${colors.bold}Tracked Dependencies:${colors.reset}`);

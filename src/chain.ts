@@ -904,7 +904,13 @@ export async function getPackageHistory(
 			const parsed = YAML.parse(preprocessed);
 
 			if (parsed && typeof parsed === "object") {
-				for (const val of Object.values<any>(parsed)) {
+				let parsedLockfiles: Record<string, any> = {};
+				if (parsed.lockfiles && typeof parsed.lockfiles === "object") {
+					parsedLockfiles = parsed.lockfiles;
+				} else {
+					parsedLockfiles = parsed;
+				}
+				for (const val of Object.values<any>(parsedLockfiles)) {
 					if (val && typeof val === "object" && val.packages) {
 						if (Array.isArray(val.packages)) {
 							const firstItem = val.packages[0];
