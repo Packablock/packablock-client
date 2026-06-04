@@ -189,7 +189,7 @@ export async function pushChain(
 	const isCI = process.env.CI ? "true" : "false";
 	const gitActor = process.env.GITHUB_ACTOR || process.env.USER || "unknown";
 
-	headers["X-Client-Version"] = "1.0.0";
+	headers["X-Client-Version"] = "1.1.0";
 	headers["X-Client-OS"] = clientOS;
 	headers["X-Client-Env"] = clientEnv;
 	headers["X-Client-CI"] = isCI;

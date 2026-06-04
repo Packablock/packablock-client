@@ -112,7 +112,7 @@ export function createCli(): Command {
 	program
 		.name("pblk")
 		.description("Cryptographically secured parallel package log client CLI")
-		.version("1.0.0")
+		.version("1.1.0")
 		.option(
 			"--strict",
 			"Strict mode: Error if attempting to append or init a forgotten lockfile",
