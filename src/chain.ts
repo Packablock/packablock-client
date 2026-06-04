@@ -519,7 +519,11 @@ export async function getLatestPackagesForFile(
 
 				let inner: any = null;
 				if (parsed && typeof parsed === "object") {
-					if (filename in parsed) {
+					if (parsed.lockfiles && typeof parsed.lockfiles === "object") {
+						if (filename in parsed.lockfiles) {
+							inner = parsed.lockfiles[filename];
+						}
+					} else if (filename in parsed) {
 						inner = parsed[filename];
 					} else {
 						// Check if there are other known lockfile keys in this block
@@ -634,22 +638,31 @@ export async function findLockfileInitBlock(
 			try {
 				const preprocessed = dataDocStr.replace(/^(\s*)(@[^:]+):/gm, '$1"$2":');
 				const parsed = YAML.parse(preprocessed);
-				if (parsed && typeof parsed === "object" && filename in parsed) {
-					const inner = parsed[filename];
-					if (i === 0) {
-						initBlockIndex = 0;
-						isTracked = true;
-					} else if (inner && typeof inner === "object") {
-						if (inner.chain_event === "init") {
-							initBlockIndex = i / 2;
+				if (parsed && typeof parsed === "object") {
+					let inner: any = null;
+					if (parsed.lockfiles && typeof parsed.lockfiles === "object") {
+						if (filename in parsed.lockfiles) {
+							inner = parsed.lockfiles[filename];
+						}
+					} else if (filename in parsed) {
+						inner = parsed[filename];
+					}
+					if (inner) {
+						if (i === 0) {
+							initBlockIndex = 0;
 							isTracked = true;
-						} else if (inner.chain_event === "forget") {
-							isTracked = false;
-						} else if (inner.packages) {
-							if (!isTracked) {
+						} else if (inner && typeof inner === "object") {
+							if (inner.chain_event === "init") {
 								initBlockIndex = i / 2;
+								isTracked = true;
+							} else if (inner.chain_event === "forget") {
+								isTracked = false;
+							} else if (inner.packages) {
+								if (!isTracked) {
+									initBlockIndex = i / 2;
+								}
+								isTracked = true;
 							}
-							isTracked = true;
 						}
 					}
 				}
@@ -680,18 +693,27 @@ export async function findLockfileForgetBlock(
 			try {
 				const preprocessed = dataDocStr.replace(/^(\s*)(@[^:]+):/gm, '$1"$2":');
 				const parsed = YAML.parse(preprocessed);
-				if (parsed && typeof parsed === "object" && filename in parsed) {
-					const inner = parsed[filename];
-					if (i === 0) {
-						isTracked = true;
-					} else if (inner && typeof inner === "object") {
-						if (inner.chain_event === "init") {
+				if (parsed && typeof parsed === "object") {
+					let inner: any = null;
+					if (parsed.lockfiles && typeof parsed.lockfiles === "object") {
+						if (filename in parsed.lockfiles) {
+							inner = parsed.lockfiles[filename];
+						}
+					} else if (filename in parsed) {
+						inner = parsed[filename];
+					}
+					if (inner) {
+						if (i === 0) {
 							isTracked = true;
-						} else if (inner.chain_event === "forget") {
-							forgetBlockIndex = i / 2;
-							isTracked = false;
-						} else if (inner.packages) {
-							isTracked = true;
+						} else if (inner && typeof inner === "object") {
+							if (inner.chain_event === "init") {
+								isTracked = true;
+							} else if (inner.chain_event === "forget") {
+								forgetBlockIndex = i / 2;
+								isTracked = false;
+							} else if (inner.packages) {
+								isTracked = true;
+							}
 						}
 					}
 				}
@@ -716,7 +738,11 @@ export async function hasForgetEvents(filepath: string): Promise<boolean> {
 				const preprocessed = dataDocStr.replace(/^(\s*)(@[^:]+):/gm, '$1"$2":');
 				const parsed = YAML.parse(preprocessed);
 				if (parsed && typeof parsed === "object") {
-					for (const val of Object.values(parsed)) {
+					const targets =
+						parsed.lockfiles && typeof parsed.lockfiles === "object"
+							? parsed.lockfiles
+							: parsed;
+					for (const val of Object.values(targets)) {
 						if (
 							val &&
 							typeof val === "object" &&
@@ -758,7 +784,11 @@ export async function getLatestPackages(
 				const preprocessed = dataDocStr.replace(/^(\s*)(@[^:]+):/gm, '$1"$2":');
 				const parsed = YAML.parse(preprocessed);
 				if (parsed && typeof parsed === "object") {
-					for (const [key, val] of Object.entries(parsed)) {
+					const targets =
+						parsed.lockfiles && typeof parsed.lockfiles === "object"
+							? parsed.lockfiles
+							: parsed;
+					for (const [key, val] of Object.entries(targets)) {
 						if (val && typeof val === "object" && (val as any).packages) {
 							allKeys.add(key);
 						}

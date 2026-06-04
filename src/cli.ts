@@ -33,6 +33,7 @@ import {
 	parseLockfiles,
 	parseSingleLockfileContent,
 	locatePackageInFile,
+	readPackageJsonConstraints,
 } from "./lockfile.js";
 import { parseSemVerConstraint, renderCandle } from "./semver.js";
 
@@ -121,15 +122,28 @@ export function createCli(): Command {
 				`📦 ${colors.bold}Parsing lockfiles:${colors.reset} ${options.lockfile.join(", ")}`,
 			);
 			try {
-				const payloadObj: Record<string, any> = {};
+				const lockfilesPayload: Record<string, any> = {};
+				let firstLockfilePath: string | null = null;
 				for (const lockfilePath of options.lockfile) {
+					if (!firstLockfilePath) firstLockfilePath = lockfilePath;
 					const filenameKey = path.basename(lockfilePath);
 					const parsed = parseLockfiles([lockfilePath]);
-					payloadObj[filenameKey] = {
+					lockfilesPayload[filenameKey] = {
 						packages: Object.entries(parsed.packages).map(([name, ver]) => ({
 							[name]: ver,
 						})),
 					};
+				}
+				const payloadObj: Record<string, any> = {
+					lockfiles: lockfilesPayload,
+				};
+				if (firstLockfilePath) {
+					const constraints = readPackageJsonConstraints(firstLockfilePath);
+					if (constraints) {
+						payloadObj["package.json"] = {
+							constraints,
+						};
+					}
 				}
 				return YAML.stringify(payloadObj);
 			} catch (err: any) {
@@ -253,15 +267,54 @@ export function createCli(): Command {
 							timestamp: date,
 						};
 
+						let constraints: any = null;
+						try {
+							const pkgDir = path.dirname(lockfilePath);
+							const pkgShowCmd = `git show ${sha}:${path.join(pkgDir, "package.json")}`;
+							const pkgContent = execSync(pkgShowCmd, {
+								encoding: "utf8",
+								stdio: ["pipe", "pipe", "ignore"],
+							});
+							const pkg = JSON.parse(pkgContent);
+							const tempConstraints: any[] = [];
+							const depKeys = [
+								"dependencies",
+								"devDependencies",
+								"peerDependencies",
+							];
+							for (const key of depKeys) {
+								if (pkg[key] && typeof pkg[key] === "object") {
+									for (const [name, constraint] of Object.entries(pkg[key])) {
+										if (
+											typeof constraint === "string" &&
+											!tempConstraints.some((c) => name in c)
+										) {
+											tempConstraints.push({ [name]: constraint });
+										}
+									}
+								}
+							}
+							if (tempConstraints.length > 0) {
+								constraints = tempConstraints;
+							}
+						} catch {}
+
 						if (blockCount === 0) {
 							const filenameKey = path.basename(lockfilePath);
-							const payloadObj = {
-								[filenameKey]: {
-									packages: Object.entries(rawPackages).map(([name, ver]) => ({
-										[name]: ver,
-									})),
+							const payloadObj: any = {
+								lockfiles: {
+									[filenameKey]: {
+										packages: Object.entries(rawPackages).map(
+											([name, ver]) => ({
+												[name]: ver,
+											}),
+										),
+									},
 								},
 							};
+							if (constraints) {
+								payloadObj["package.json"] = { constraints };
+							}
 							const blockData = YAML.stringify(payloadObj);
 							await initChain(
 								resolvedPath,
@@ -279,11 +332,17 @@ export function createCli(): Command {
 							}
 							const filenameKey = path.basename(lockfilePath);
 							const diff = getPackageDiff(lastPackages, rawPackages, locations);
-							const blockData = YAML.stringify({
-								[filenameKey]: {
-									packages: diff,
+							const payloadObj: any = {
+								lockfiles: {
+									[filenameKey]: {
+										packages: diff,
+									},
 								},
-							});
+							};
+							if (constraints) {
+								payloadObj["package.json"] = { constraints };
+							}
+							const blockData = YAML.stringify(payloadObj);
 							await appendBlock(resolvedPath, blockData, customMeta);
 						}
 
@@ -312,10 +371,12 @@ export function createCli(): Command {
 			if (fileExists && options.lockfile && options.lockfile.length > 0) {
 				// Existing chain: check for introducing new lockfiles mid-chain
 				try {
-					const payloadObj: Record<string, any> = {};
+					const lockfilesPayload: Record<string, any> = {};
+					let firstLockfilePath: string | null = null;
 					let newLockfilesCount = 0;
 
 					for (const lockfilePath of options.lockfile) {
+						if (!firstLockfilePath) firstLockfilePath = lockfilePath;
 						const filenameKey = path.basename(lockfilePath);
 						const initBlock = await findLockfileInitBlock(
 							resolvedPath,
@@ -343,7 +404,7 @@ export function createCli(): Command {
 						}
 
 						const parsed = parseLockfiles([lockfilePath]);
-						payloadObj[filenameKey] = {
+						lockfilesPayload[filenameKey] = {
 							chain_event: "init",
 							packages: Object.entries(parsed.packages).map(([name, ver]) => ({
 								[name]: ver,
@@ -353,6 +414,17 @@ export function createCli(): Command {
 					}
 
 					if (newLockfilesCount > 0) {
+						const payloadObj: Record<string, any> = {
+							lockfiles: lockfilesPayload,
+						};
+						if (firstLockfilePath) {
+							const constraints = readPackageJsonConstraints(firstLockfilePath);
+							if (constraints) {
+								payloadObj["package.json"] = {
+									constraints,
+								};
+							}
+						}
 						const blockData = YAML.stringify(payloadObj);
 						const meta = await appendBlock(resolvedPath, blockData);
 						console.log(
@@ -439,10 +511,12 @@ export function createCli(): Command {
 					`📦 ${colors.bold}Parsing lockfiles and computing diff:${colors.reset} ${options.lockfile.join(", ")}`,
 				);
 				try {
-					const payloadObj: Record<string, any> = {};
+					const lockfilesPayload: Record<string, any> = {};
+					let firstLockfilePath: string | null = null;
 					let totalChanges = 0;
 
 					for (const lockfilePath of options.lockfile) {
+						if (!firstLockfilePath) firstLockfilePath = lockfilePath;
 						const filenameKey = path.basename(lockfilePath);
 						const isTracked = await hasLockfileInChain(
 							resolvedPath,
@@ -481,7 +555,7 @@ export function createCli(): Command {
 							parsed.locations,
 						);
 						if (diff.length > 0) {
-							payloadObj[filenameKey] = {
+							lockfilesPayload[filenameKey] = {
 								packages: diff,
 							};
 							totalChanges += diff.length;
@@ -489,10 +563,21 @@ export function createCli(): Command {
 					}
 
 					if (totalChanges === 0) {
-						console.log(`\nℹ️  No package changes detected. Nothing to append.`);
+						console.log(`\nℹ  No package changes detected. Nothing to append.`);
 						return;
 					}
 
+					const payloadObj: Record<string, any> = {
+						lockfiles: lockfilesPayload,
+					};
+					if (firstLockfilePath) {
+						const constraints = readPackageJsonConstraints(firstLockfilePath);
+						if (constraints) {
+							payloadObj["package.json"] = {
+								constraints,
+							};
+						}
+					}
 					data = YAML.stringify(payloadObj);
 				} catch (err: any) {
 					console.error(

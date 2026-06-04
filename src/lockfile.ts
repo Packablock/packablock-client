@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
 
 export interface LockfileData {
@@ -266,4 +266,34 @@ export function locatePackageInFile(
 	}
 
 	return { line: 1, column: 1 };
+}
+
+export function readPackageJsonConstraints(
+	lockfilePath: string,
+): Array<Record<string, string>> | null {
+	const dir = path.dirname(path.resolve(lockfilePath));
+	const pkgPath = path.join(dir, "package.json");
+	if (!existsSync(pkgPath)) {
+		return null;
+	}
+	try {
+		const content = readFileSync(pkgPath, "utf8");
+		const pkg = JSON.parse(content);
+		const constraints: Array<Record<string, string>> = [];
+		const depKeys = ["dependencies", "devDependencies", "peerDependencies"];
+		for (const key of depKeys) {
+			if (pkg[key] && typeof pkg[key] === "object") {
+				for (const [name, constraint] of Object.entries(pkg[key])) {
+					if (typeof constraint === "string") {
+						if (!constraints.some((c) => name in c)) {
+							constraints.push({ [name]: constraint });
+						}
+					}
+				}
+			}
+		}
+		return constraints.length > 0 ? constraints : null;
+	} catch (e) {
+		return null;
+	}
 }
