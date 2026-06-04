@@ -1007,6 +1007,7 @@ export function createCli(): Command {
 				};
 
 				const targetPackages = Object.keys(directDeps);
+				const localLockfilePackages = await getLocalPinnedVersions();
 
 				if (targetPackages.length === 0) {
 					console.log(
@@ -1108,20 +1109,18 @@ export function createCli(): Command {
 					console.log(`  ► : Extension to Infinity (>=)\n`);
 
 					console.log(
-						`----------------------------------------------------------------------------------------------------------------`,
+						`-------------------------------------------------------------------------------------------------------------------------`,
 					);
 					console.log(
-						`Package Name      Constraint  Version Timeline (Low -> Installed -> Upstream -> Max)`,
+						`Package Name      Tracked  Constraint  Version Timeline (Low -> Installed -> Upstream -> Max)`,
 					);
 					console.log(
-						`----------------------------------------------------------------------------------------------------------------`,
+						`-------------------------------------------------------------------------------------------------------------------------`,
 					);
 
 					const openFusePackages: string[] = [];
 					const techDebtPackages: string[] = [];
 					const upToDatePackages: string[] = [];
-
-					const localLockfilePackages = await getLocalPinnedVersions();
 
 					for (const pkg of targetPackages) {
 						const constraint = directDeps[pkg];
@@ -1167,10 +1166,17 @@ export function createCli(): Command {
 							upToDatePackages.push(pkg);
 						}
 
-						console.log(`${pkg.padEnd(17)} ${constraint.padEnd(11)} ${candle}`);
+						const trackedStr = pkgHist ? "Yes" : "No";
+						const coloredTracked = pkgHist
+							? `${colors.green}${trackedStr.padEnd(8)}${colors.reset}`
+							: `${colors.red}${trackedStr.padEnd(8)}${colors.reset}`;
+
+						console.log(
+							`${pkg.padEnd(17)} ${coloredTracked} ${constraint.padEnd(11)} ${candle}`,
+						);
 					}
 					console.log(
-						`----------------------------------------------------------------------------------------------------------------\n`,
+						`-------------------------------------------------------------------------------------------------------------------------\n`,
 					);
 
 					if (openFusePackages.length > 0 || techDebtPackages.length > 0) {
@@ -1201,18 +1207,47 @@ export function createCli(): Command {
 					}
 				} else {
 					// Standard check run without --visualize
-					console.log(`${colors.bold}Tracked Dependencies:${colors.reset}`);
+					const tracked: string[] = [];
+					const untracked: string[] = [];
 					for (const pkg of targetPackages) {
+						const pkgHist = history[pkg];
+						if (pkgHist) {
+							tracked.push(pkg);
+						} else {
+							untracked.push(pkg);
+						}
+					}
+
+					console.log(`${colors.bold}Tracked Dependencies:${colors.reset}`);
+					for (const pkg of tracked) {
 						const constraint = directDeps[pkg];
 						if (constraint === undefined) continue;
-						const pkgHist = history[pkg];
-						if (!pkgHist) continue;
-						const pinned = pkgHist.currentPinned;
+						const pinned = history[pkg]!.currentPinned;
 						console.log(
 							`  * ${colors.green}${pkg}${colors.reset} (pinned to ${pinned}, constraint is ${constraint})`,
 						);
 					}
 					console.log();
+
+					if (untracked.length > 0) {
+						console.log(
+							`${colors.bold}Untracked Dependencies (Not in ledger chain):${colors.reset}`,
+						);
+						for (const pkg of untracked) {
+							const constraint = directDeps[pkg];
+							if (constraint === undefined) continue;
+							const pinned =
+								localLockfilePackages[pkg] ||
+								constraint
+									.replace(/^[\^~>=<]+/g, "")
+									.replace(/\.x$/g, ".0")
+									.trim();
+							console.log(
+								`  * ${colors.red}${pkg}${colors.reset} (pinned to ${pinned}, constraint is ${constraint}) ${colors.yellow}[UNTRACKED]${colors.reset}`,
+							);
+						}
+						console.log();
+					}
 				}
 			} catch (err: any) {
 				console.error(
