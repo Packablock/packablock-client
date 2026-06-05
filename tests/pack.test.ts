@@ -126,9 +126,9 @@ describe("Release Packaging Subcommand Tests", () => {
 		execSync(
 			`tar -xzf "${tempTarball}" -C "${extractDir}" pkablk-manifest.json packablock.yaml`,
 		);
-		expect(fsSync.existsSync(path.join(extractDir, "pkablk-manifest.json"))).toBe(
-			true,
-		);
+		expect(
+			fsSync.existsSync(path.join(extractDir, "pkablk-manifest.json")),
+		).toBe(true);
 		expect(fsSync.existsSync(path.join(extractDir, "packablock.yaml"))).toBe(
 			true,
 		);

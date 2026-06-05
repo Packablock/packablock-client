@@ -227,7 +227,9 @@ export async function packWorkspace(
 
 	// 7. Compile release tarball to a secure temporary directory
 	const os = await import("node:os");
-	const tempTarballDir = await fs.mkdtemp(path.join(os.tmpdir(), "pkablk-pack-"));
+	const tempTarballDir = await fs.mkdtemp(
+		path.join(os.tmpdir(), "pkablk-pack-"),
+	);
 	const tempTarballPath = path.join(tempTarballDir, outputTarballName);
 
 	let copiedLog = false;
