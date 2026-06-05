@@ -88,7 +88,7 @@ describe("Git History Replay Ingestion Tests", () => {
 		const chainPath = path.join(tempDir, "packablock.yaml");
 		const cliPath = path.resolve(__dirname, "../index.ts");
 
-		// Run pblk init with --git-history option
+		// Run pkablk init with --git-history option
 		execSync(`bun run ${cliPath} init packablock.yaml --git-history bun.lock`, {
 			cwd: tempDir,
 		});

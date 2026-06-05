@@ -221,13 +221,13 @@ export async function packWorkspace(
 		authType,
 	};
 
-	// 6. Write pblk-manifest.json to target workspace
-	const manifestPath = path.join(resolvedDir, "pblk-manifest.json");
+	// 6. Write pkablk-manifest.json to target workspace
+	const manifestPath = path.join(resolvedDir, "pkablk-manifest.json");
 	await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2), "utf8");
 
 	// 7. Compile release tarball to a secure temporary directory
 	const os = await import("node:os");
-	const tempTarballDir = await fs.mkdtemp(path.join(os.tmpdir(), "pblk-pack-"));
+	const tempTarballDir = await fs.mkdtemp(path.join(os.tmpdir(), "pkablk-pack-"));
 	const tempTarballPath = path.join(tempTarballDir, outputTarballName);
 
 	let copiedLog = false;
@@ -240,7 +240,7 @@ export async function packWorkspace(
 			copiedLog = true;
 		}
 
-		const cmd = `tar -czf "${tempTarballPath}" -C "${resolvedDir}" "${logBasename}" pblk-manifest.json`;
+		const cmd = `tar -czf "${tempTarballPath}" -C "${resolvedDir}" "${logBasename}" pkablk-manifest.json`;
 		execSync(cmd, { stdio: "pipe" });
 
 		// Move output to final destination
@@ -286,14 +286,14 @@ export async function verifyPack(
 }> {
 	const resolvedTarball = path.resolve(tarballPath);
 	const os = await import("node:os");
-	const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pblk-verify-"));
+	const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pkablk-verify-"));
 
 	try {
-		// 1. Extract pblk-manifest.json first to identify the block/ledger state
-		let cmd = `tar -xzf "${resolvedTarball}" -C "${tempDir}" pblk-manifest.json`;
+		// 1. Extract pkablk-manifest.json first to identify the block/ledger state
+		let cmd = `tar -xzf "${resolvedTarball}" -C "${tempDir}" pkablk-manifest.json`;
 		execSync(cmd, { stdio: "ignore" });
 
-		const manifestPath = path.join(tempDir, "pblk-manifest.json");
+		const manifestPath = path.join(tempDir, "pkablk-manifest.json");
 		const manifestStr = await fs.readFile(manifestPath, "utf8");
 		const manifest: BuildManifest = JSON.parse(manifestStr);
 

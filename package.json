@@ -4,7 +4,7 @@
 	"module": "index.ts",
 	"type": "module",
 	"bin": {
-		"pblk": "./index.ts"
+		"pkablk": "./index.ts"
 	},
 	"scripts": {
 		"start": "bun run index.ts",

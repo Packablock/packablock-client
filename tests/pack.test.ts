@@ -113,20 +113,20 @@ describe("Release Packaging Subcommand Tests", () => {
 		expect(manifest.authType).toBe("hmac-sha256");
 		expect(manifest.signerIdentities).toHaveLength(1);
 
-		// Assert pblk-manifest.json does NOT exist inside target workspace anymore (clutter-free)
-		const manifestJsonPath = path.join(tempDir, "pblk-manifest.json");
+		// Assert pkablk-manifest.json does NOT exist inside target workspace anymore (clutter-free)
+		const manifestJsonPath = path.join(tempDir, "pkablk-manifest.json");
 		expect(fsSync.existsSync(manifestJsonPath)).toBe(false);
 
 		// Assert release.tar.gz was successfully compiled on disk
 		expect(fsSync.existsSync(tempTarball)).toBe(true);
 
-		// Verify we can extract pblk-manifest.json and packablock.yaml from the tarball
+		// Verify we can extract pkablk-manifest.json and packablock.yaml from the tarball
 		const extractDir = path.join(tempDir, "extract-test");
 		await fs.mkdir(extractDir, { recursive: true });
 		execSync(
-			`tar -xzf "${tempTarball}" -C "${extractDir}" pblk-manifest.json packablock.yaml`,
+			`tar -xzf "${tempTarball}" -C "${extractDir}" pkablk-manifest.json packablock.yaml`,
 		);
-		expect(fsSync.existsSync(path.join(extractDir, "pblk-manifest.json"))).toBe(
+		expect(fsSync.existsSync(path.join(extractDir, "pkablk-manifest.json"))).toBe(
 			true,
 		);
 		expect(fsSync.existsSync(path.join(extractDir, "packablock.yaml"))).toBe(
@@ -135,7 +135,7 @@ describe("Release Packaging Subcommand Tests", () => {
 
 		// Read manifest file from extracted location and check it does NOT list every source file
 		const manifestContent = JSON.parse(
-			await fs.readFile(path.join(extractDir, "pblk-manifest.json"), "utf8"),
+			await fs.readFile(path.join(extractDir, "pkablk-manifest.json"), "utf8"),
 		);
 		expect(manifestContent.files).toBeUndefined();
 	});

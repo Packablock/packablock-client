@@ -37,13 +37,13 @@ Because the wrapper automatically exports the correct token session keys inside 
 ---
 
 ## 🛠️ Workspace Architecture Mapping
-* **`packablock-client`** (`https://github.com/Packablock/packablock-client`): Bun CLI client that automatically reads the local config and pushes cryptographically verified logs to `/api/v1/log/push`. Contains the `wmill` integration template at `packablock-client/windmill/`.
+* **`packablock-client`** (`https://github.com/Packablock/packablock-client`): Bun CLI client that automatically reads the local config and pushes cryptographically verified logs to `/api/v1/log/push`.
 * **`packablock-registry`** (`https://github.com/Packablock/packablock-api`): The zero-trust Packablock Supply Chain Trust Registry server. Fastify SQLite server listening locally on port `3030`.
-* **Windmill Template**: Located in `packablock-client/windmill/` containing the `verify_and_report` flow and scripts.
+* **Windmill Template**: Located in `packablock-demo/windmill/` containing the `verify_and_report` flow and scripts.
 
 ## 🛠️ Tooling & Infrastructure Context
-* **Windmill CLI (`wmill`)**: Installed and available at `/home/aaron/.nvm/versions/node/v24.14.1/bin/wmill`. Always run from inside the `packablock-client/windmill/` directory.
-* **Lockfile Metadata & Linting**: Run `wmill generate-metadata` inside `packablock-client/windmill/` to rebuild lockfiles/schemas, and `wmill lint` to validate flows.
+* **Windmill CLI (`wmill`)**: Installed and available at `/home/aaron/.nvm/versions/node/v24.14.1/bin/wmill`. Always run from inside the `packablock-demo/windmill/` directory.
+* **Lockfile Metadata & Linting**: Run `wmill generate-metadata` inside `packablock-demo/windmill/` to rebuild lockfiles/schemas, and `wmill lint` to validate flows.
 * **Pushes to Windmill**: Deploy templates with `bun start wmill-setup` or `wmill sync push` inside the `windmill/` directory.
 * **Active Workload (WIP)**: Run `./wip.sh` inside the workspace root directory to instantly view all "In Progress" organization tasks with minimal token consumption.
 

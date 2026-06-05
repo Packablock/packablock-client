@@ -110,7 +110,7 @@ export function createCli(): Command {
 	const program = new Command();
 
 	program
-		.name("pblk")
+		.name("pkablk")
 		.description("Cryptographically secured parallel package log client CLI")
 		.version("1.1.0")
 		.option(
@@ -432,7 +432,7 @@ export function createCli(): Command {
 						);
 						if (initBlock !== null) {
 							throw new Error(
-								`Lockfile '${filenameKey}' is already tracked in this chain (initialized in Block ${initBlock}). Use 'pblk append' to record updates or specify a new lockfile to track.`,
+								`Lockfile '${filenameKey}' is already tracked in this chain (initialized in Block ${initBlock}). Use 'pkablk append' to record updates or specify a new lockfile to track.`,
 							);
 						}
 
@@ -587,7 +587,7 @@ export function createCli(): Command {
 								);
 							} else {
 								throw new Error(
-									`Lockfile '${filenameKey}' is not tracked in this chain. New lockfiles can only be introduced when initializing the chain (using 'pblk init').`,
+									`Lockfile '${filenameKey}' is not tracked in this chain. New lockfiles can only be introduced when initializing the chain (using 'pkablk init').`,
 								);
 							}
 						}
