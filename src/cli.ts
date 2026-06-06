@@ -2274,5 +2274,303 @@ export function createCli(): Command {
 			}
 		});
 
+	program
+		.command("compare")
+		.argument("<file>", "Path to the log file")
+		.requiredOption(
+			"-g, --git-history <lockfile-path>",
+			"Compare git history of the specified lockfile with the chain",
+		)
+		.description(
+			"Compare git history of a lockfile with the package log chain and match blocks to commits",
+		)
+		.action(async (file, options) => {
+			await checkNeverForget(file, options);
+			const resolvedPath = path.resolve(file);
+
+			// Check if chain file exists
+			let fileExists = false;
+			try {
+				await fs.stat(resolvedPath);
+				fileExists = true;
+			} catch {}
+
+			if (!fileExists) {
+				console.error(
+					`${colors.red}${colors.bold}Error: ${colors.reset}File not found: ${resolvedPath}. Run init first.`,
+				);
+				process.exit(1);
+			}
+
+			const lockfilePath = options.gitHistory;
+			const lockfileBasename = path.basename(lockfilePath);
+
+			try {
+				// 1. Reconstruct the chain's package states block-by-block for the lockfile
+				const fileContent = await fs.readFile(resolvedPath, "utf8");
+				const docs = splitRawDocuments(fileContent);
+
+				interface ChainBlockState {
+					blockIndex: number;
+					timestamp: string;
+					packages: Record<string, string>;
+					isForget: boolean;
+				}
+
+				const chainBlocks: ChainBlockState[] = [];
+				let currentPackages: Record<string, string> = {};
+
+				for (let i = 0; i < docs.length; i += 2) {
+					const dataDocStr = docs[i];
+					const metaDocStr = docs[i + 1];
+					if (!dataDocStr || !metaDocStr) continue;
+
+					try {
+						const preprocessed = dataDocStr.replace(
+							/^(\s*)(@[^:]+):/gm,
+							'$1"$2":',
+						);
+						const parsed = YAML.parse(preprocessed);
+						const metaParsed = YAML.parse(metaDocStr);
+						const meta = metaParsed?.["$yaml-chain-meta"];
+						if (!meta) continue;
+
+						let inner: any = null;
+						let hasUpdates = false;
+
+						if (parsed && typeof parsed === "object") {
+							if (parsed.lockfiles && typeof parsed.lockfiles === "object") {
+								if (lockfileBasename in parsed.lockfiles) {
+									inner = parsed.lockfiles[lockfileBasename];
+									hasUpdates = true;
+								}
+							} else if (lockfileBasename in parsed) {
+								inner = parsed[lockfileBasename];
+								hasUpdates = true;
+							}
+						}
+
+						if (hasUpdates && inner) {
+							if (inner.chain_event === "forget") {
+								currentPackages = {};
+								chainBlocks.push({
+									blockIndex: meta.block_index,
+									timestamp: meta.timestamp,
+									packages: {},
+									isForget: true,
+								});
+							} else if (Array.isArray(inner.packages)) {
+								const firstItem = inner.packages[0];
+								let isDiff = false;
+								if (firstItem && typeof firstItem === "object") {
+									const values = Object.values(firstItem);
+									if (values.length > 0 && Array.isArray(values[0])) {
+										isDiff = true;
+									}
+								}
+
+								if (!isDiff) {
+									currentPackages = {};
+									for (const item of inner.packages) {
+										if (item && typeof item === "object") {
+											for (const [name, ver] of Object.entries(item)) {
+												currentPackages[name] = String(ver);
+											}
+										}
+									}
+								} else {
+									for (const item of inner.packages) {
+										if (item && typeof item === "object") {
+											for (const [name, ops] of Object.entries(item)) {
+												if (Array.isArray(ops)) {
+													let isRemoved = false;
+													let newVer = "";
+													for (const op of ops) {
+														if (op && typeof op === "object") {
+															if (op.msg === "removed") {
+																isRemoved = true;
+															}
+															if (op.new !== undefined) {
+																newVer = String(op.new);
+															}
+														}
+													}
+													if (isRemoved) {
+														delete currentPackages[name];
+													} else if (newVer) {
+														currentPackages[name] = newVer;
+													}
+												}
+											}
+										}
+									}
+								}
+
+								chainBlocks.push({
+									blockIndex: meta.block_index,
+									timestamp: meta.timestamp,
+									packages: { ...currentPackages },
+									isForget: false,
+								});
+							}
+						}
+					} catch {}
+				}
+
+				// 2. Fetch git history and reconstruct commit states
+				const gitLogCmd = `git log --follow --reverse --format="%H|%aN|%aE|%aI|%s" -- ${lockfilePath}`;
+				const logStdout = execSync(gitLogCmd, { encoding: "utf8" });
+				const lines = logStdout.split("\n").filter((l) => l.trim().length > 0);
+
+				interface GitCommitState {
+					sha: string;
+					date: string;
+					message: string;
+					packages: Record<string, string>;
+					isDeletion: boolean;
+				}
+
+				const gitCommits: GitCommitState[] = [];
+				let lastGitPackages: Record<string, string> = {};
+				let lastGitPackagesStr = "";
+
+				for (const line of lines) {
+					const parts = line.split("|");
+					const sha = parts[0];
+					const name = parts[1];
+					const email = parts[2];
+					const date = parts[3];
+					const message = parts.slice(4).join("|");
+
+					if (!sha || !date) continue;
+
+					// Check if deleted
+					const statusCmd = `git diff-tree --no-commit-id --name-status -r ${sha} -- ${lockfilePath}`;
+					let isDeletion = false;
+					try {
+						const statusOutput = execSync(statusCmd, {
+							encoding: "utf8",
+						}).trim();
+						isDeletion = statusOutput.startsWith("D");
+					} catch {}
+
+					if (isDeletion) {
+						gitCommits.push({
+							sha,
+							date,
+							message,
+							packages: {},
+							isDeletion: true,
+						});
+						lastGitPackages = {};
+						lastGitPackagesStr = "";
+						continue;
+					}
+
+					const showCmd = `git show ${sha}:${lockfilePath}`;
+					let content = "";
+					try {
+						content = execSync(showCmd, {
+							encoding: "utf8",
+							stdio: ["pipe", "pipe", "ignore"],
+						});
+					} catch {
+						continue;
+					}
+
+					let parsedPackages: Record<string, string> = {};
+					try {
+						parsedPackages = parseSingleLockfileContent(
+							lockfileBasename,
+							content,
+						);
+					} catch {
+						continue;
+					}
+
+					const packagesYaml = YAML.stringify(parsedPackages).trim();
+					if (packagesYaml === lastGitPackagesStr) {
+						continue; // Skip if no packages changed
+					}
+
+					lastGitPackages = parsedPackages;
+					lastGitPackagesStr = packagesYaml;
+
+					gitCommits.push({
+						sha,
+						date,
+						message,
+						packages: { ...parsedPackages },
+						isDeletion: false,
+					});
+				}
+
+				// 3. Match chain blocks with git commits
+				const matchedCommits = new Set<string>();
+				const matchedBlocks = new Set<number>();
+
+				console.log(
+					`\n🔎 ${colors.bold}Comparing chain blocks with git history...${colors.reset}\n`,
+				);
+
+				for (const block of chainBlocks) {
+					let match: GitCommitState | null = null;
+
+					// Try to match by package state equality
+					for (const commit of gitCommits) {
+						if (matchedCommits.has(commit.sha)) continue;
+
+						if (block.isForget && commit.isDeletion) {
+							match = commit;
+							break;
+						} else if (!block.isForget && !commit.isDeletion) {
+							// Check if package states are identical
+							const blockKeys = Object.keys(block.packages);
+							const commitKeys = Object.keys(commit.packages);
+							if (blockKeys.length === commitKeys.length) {
+								let isMatch = true;
+								for (const key of blockKeys) {
+									if (block.packages[key] !== commit.packages[key]) {
+										isMatch = false;
+										break;
+									}
+								}
+								if (isMatch) {
+									match = commit;
+									break;
+								}
+							}
+						}
+					}
+
+					if (match) {
+						matchedCommits.add(match.sha);
+						matchedBlocks.add(block.blockIndex);
+						console.log(
+							`Block ${block.blockIndex} matches commit ${match.sha.slice(0, 7)}: ${match.message}`,
+						);
+					} else {
+						console.log(
+							`${colors.yellow}⚠️  Warning: Block ${block.blockIndex} has no matching commit in git history.${colors.reset}`,
+						);
+					}
+				}
+
+				// Check for unmatched commits
+				for (const commit of gitCommits) {
+					if (!matchedCommits.has(commit.sha)) {
+						console.log(
+							`${colors.yellow}⚠️  Warning: Commit ${commit.sha.slice(0, 7)} (${commit.message}) has no matching block in the chain.${colors.reset}`,
+						);
+					}
+				}
+			} catch (err: any) {
+				console.error(
+					`\n❌ ${colors.red}${colors.bold}Error during comparison:${colors.reset} ${err.message}`,
+				);
+				process.exit(1);
+			}
+		});
+
 	return program;
 }

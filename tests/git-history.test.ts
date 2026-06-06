@@ -16,6 +16,7 @@ import {
 	verifyChain,
 	initChain,
 	findLockfileForgetBlock,
+	appendBlock,
 } from "../src/chain.js";
 
 describe("Git History Replay Ingestion Tests", () => {
@@ -481,6 +482,94 @@ describe("Git History Replay Ingestion Tests", () => {
 					"cannot be forgotten under never-forget rules",
 				);
 			}
+		});
+
+		it("should successfully compare git history with a chain, matching blocks and warning on discrepancies", async () => {
+			const logContent = await fs.readFile(fixturePath, "utf8");
+			const commits = parseGitLogPatch(logContent);
+
+			// 1. Rebuild history up to commit 5 and initialize the chain
+			await applyCommits(tempDir, commits, 0, 5);
+			execSync(
+				`bun run ${cliPath} init packablock.yaml --git-history bun.lock`,
+				{
+					cwd: tempDir,
+				},
+			);
+
+			// 2. Rebuild the rest of the commits and append them
+			await applyCommits(tempDir, commits, 5, commits.length);
+			execSync(
+				`bun run ${cliPath} append packablock.yaml --git-history bun.lock`,
+				{
+					cwd: tempDir,
+				},
+			);
+
+			// 3. Compare the complete chain with the git history
+			const compareOutput = execSync(
+				`bun run ${cliPath} compare packablock.yaml --git-history bun.lock`,
+				{ cwd: tempDir, encoding: "utf8" },
+			);
+
+			// We expect blocks to match commits
+			expect(compareOutput).toContain("Block 0 matches commit");
+			expect(compareOutput).not.toContain("Warning");
+
+			// 4. Create an unmatched commit in the Git history (changes bun.lock but not appended to chain)
+			const mockLockfilePath = path.join(tempDir, "bun.lock");
+			await fs.writeFile(
+				mockLockfilePath,
+				JSON.stringify({
+					lockfileVersion: 1,
+					packages: {
+						"unmatched-pkg": ["unmatched-pkg@1.0.0", "", {}, "sha-unmatched"],
+					},
+				}),
+				"utf8",
+			);
+			execSync("git add bun.lock", { cwd: tempDir });
+			execSync("git commit -m 'chore: add unmatched package'", {
+				cwd: tempDir,
+				env: {
+					...process.env,
+					GIT_AUTHOR_NAME: "Test Bot",
+					GIT_AUTHOR_EMAIL: "bot@test.com",
+					GIT_AUTHOR_DATE: "2026-06-06T13:00:00Z",
+					GIT_COMMITTER_NAME: "Test Bot",
+					GIT_COMMITTER_EMAIL: "bot@test.com",
+					GIT_COMMITTER_DATE: "2026-06-06T13:00:00Z",
+				},
+			});
+
+			// Compare again - should warn about the unmatched commit
+			const compareOutput2 = execSync(
+				`bun run ${cliPath} compare packablock.yaml --git-history bun.lock`,
+				{ cwd: tempDir, encoding: "utf8" },
+			);
+			expect(compareOutput2).toContain("has no matching block in the chain");
+
+			// 5. Create an unmatched block in the chain (tampered/appended dummy block)
+			const dummyAppendData = YAML.stringify({
+				lockfiles: {
+					"bun.lock": {
+						packages: [
+							{
+								"non-existent-pkg": [{ new: "2.0.0" }, { loc: "1,1" }],
+							},
+						],
+					},
+				},
+			});
+			await appendBlock(chainPath, dummyAppendData);
+
+			// Compare again - should warn about both unmatched commit and unmatched block
+			const compareOutput3 = execSync(
+				`bun run ${cliPath} compare packablock.yaml --git-history bun.lock`,
+				{ cwd: tempDir, encoding: "utf8" },
+			);
+			expect(compareOutput3).toContain("has no matching commit in git history");
+			expect(compareOutput3).toContain("has no matching block in the chain");
 		});
 	});
 });
