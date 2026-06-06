@@ -161,10 +161,7 @@ describe("Git History Replay Ingestion Tests", () => {
 		const tempDir = path.resolve(__dirname, "../temp-git-test-replay");
 		const chainPath = path.join(tempDir, "packablock.yaml");
 		const cliPath = path.resolve(__dirname, "../index.ts");
-		const fixturePath = path.resolve(
-			__dirname,
-			"../../packablock-demo/tests/fixtures/bun.lock.log",
-		);
+		const fixturePath = path.resolve(__dirname, "./fixtures/bun.lock.log");
 
 		interface CommitPatch {
 			sha: string;
