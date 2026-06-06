@@ -104,6 +104,21 @@ function parseYarnLock(text: string): Record<string, string> {
 	return packages;
 }
 
+/**
+ * Parses Gemfile.lock format.
+ */
+function parseGemfileLock(content: string): Record<string, string> {
+	const packages: Record<string, string> = {};
+	const lines = content.split(/\r?\n/);
+	for (let line of lines) {
+		const match = line.match(/^ {4}([a-zA-Z0-9_\-\.]+)\s+\(([^)]+)\)/);
+		if (match && match[1] && match[2]) {
+			packages[match[1]] = match[2];
+		}
+	}
+	return packages;
+}
+
 function getPackageNameFromRef(ref: string): string {
 	// Scoped packages like @types/node@^18.0.0 -> @types/node
 	if (ref.startsWith("@")) {
@@ -130,7 +145,22 @@ export function parseLockfiles(filepaths: string[]): LockfileData {
 
 		try {
 			let fileContentForLocation = "";
-			if (filename === "package-lock.json") {
+			if (filename === "Cargo.lock") {
+				const content = readFileSync(absolutePath, "utf8");
+				fileContentForLocation = content;
+				try {
+					const data = Bun.TOML.parse(content);
+					if (data && Array.isArray(data.package)) {
+						const pkgs: Record<string, string> = {};
+						for (const pkg of data.package) {
+							if (pkg && typeof pkg === "object" && pkg.name && pkg.version) {
+								pkgs[pkg.name] = String(pkg.version);
+							}
+						}
+						Object.assign(combinedPackages, pkgs);
+					}
+				} catch {}
+			} else if (filename === "package-lock.json") {
 				const content = readFileSync(absolutePath, "utf8");
 				fileContentForLocation = content;
 				const pkgs = parsePackageLock(content);
@@ -148,6 +178,11 @@ export function parseLockfiles(filepaths: string[]): LockfileData {
 						`Failed to parse bun.lockb using bun CLI: ${proc.stderr.toString("utf8")}`,
 					);
 				}
+			} else if (filename === "Gemfile.lock") {
+				const content = readFileSync(absolutePath, "utf8");
+				fileContentForLocation = content;
+				const pkgs = parseGemfileLock(content);
+				Object.assign(combinedPackages, pkgs);
 			} else if (
 				filename === "yarn.lock" ||
 				filename === "bun.lock" ||
@@ -200,6 +235,23 @@ export function parseSingleLockfileContent(
 	filename: string,
 	content: string,
 ): Record<string, string> {
+	if (filename === "Cargo.lock") {
+		try {
+			const data = Bun.TOML.parse(content);
+			if (data && Array.isArray(data.package)) {
+				const packages: Record<string, string> = {};
+				for (const pkg of data.package) {
+					if (pkg && typeof pkg === "object" && pkg.name && pkg.version) {
+						packages[pkg.name] = String(pkg.version);
+					}
+				}
+				return packages;
+			}
+		} catch {}
+	}
+	if (filename === "Gemfile.lock") {
+		return parseGemfileLock(content);
+	}
 	if (filename === "package-lock.json") {
 		return parsePackageLock(content);
 	}
@@ -235,6 +287,7 @@ export function locatePackageInFile(
 		new RegExp(`"node_modules/${escapedName}"\\s*:`),
 		new RegExp(`"${escapedName}"\\s*:`),
 		new RegExp(`(?:^|,)\\s*"?${escapedName}@`),
+		new RegExp(`^ {4}${escapedName}\\s+\\(`),
 	];
 
 	for (let i = 0; i < lines.length; i++) {
@@ -289,6 +342,98 @@ export function readPackageJsonConstraints(
 							constraints.push({ [name]: constraint });
 						}
 					}
+				}
+			}
+		}
+		return constraints.length > 0 ? constraints : null;
+	} catch (e) {
+		return null;
+	}
+}
+
+export function readCargoTomlConstraints(
+	lockfilePath: string,
+): Array<Record<string, string>> | null {
+	const dir = path.dirname(path.resolve(lockfilePath));
+	const tomlPath = path.join(dir, "Cargo.toml");
+	if (!existsSync(tomlPath)) {
+		return null;
+	}
+	try {
+		const content = readFileSync(tomlPath, "utf8");
+		const data = Bun.TOML.parse(content);
+		const constraints: Array<Record<string, string>> = [];
+		const depKeys = ["dependencies", "dev-dependencies", "build-dependencies"];
+		for (const key of depKeys) {
+			if (data[key] && typeof data[key] === "object") {
+				for (const [name, val] of Object.entries(data[key])) {
+					let constraint = "";
+					if (typeof val === "string") {
+						constraint = val;
+					} else if (val && typeof val === "object") {
+						const valObj = val as any;
+						if (valObj.version && typeof valObj.version === "string") {
+							constraint = valObj.version;
+						}
+					}
+					if (constraint) {
+						if (!constraints.some((c) => name in c)) {
+							constraints.push({ [name]: constraint });
+						}
+					}
+				}
+			}
+		}
+		if (
+			data.workspace &&
+			typeof data.workspace === "object" &&
+			data.workspace.dependencies &&
+			typeof data.workspace.dependencies === "object"
+		) {
+			for (const [name, val] of Object.entries(data.workspace.dependencies)) {
+				let constraint = "";
+				if (typeof val === "string") {
+					constraint = val;
+				} else if (val && typeof val === "object") {
+					const valObj = val as any;
+					if (valObj.version && typeof valObj.version === "string") {
+						constraint = valObj.version;
+					}
+				}
+				if (constraint) {
+					if (!constraints.some((c) => name in c)) {
+						constraints.push({ [name]: constraint });
+					}
+				}
+			}
+		}
+		return constraints.length > 0 ? constraints : null;
+	} catch (e) {
+		return null;
+	}
+}
+
+export function readGemfileConstraints(
+	lockfilePath: string,
+): Array<Record<string, string>> | null {
+	const dir = path.dirname(path.resolve(lockfilePath));
+	const gemfilePath = path.join(dir, "Gemfile");
+	if (!existsSync(gemfilePath)) {
+		return null;
+	}
+	try {
+		const content = readFileSync(gemfilePath, "utf8");
+		const lines = content.split(/\r?\n/);
+		const constraints: Array<Record<string, string>> = [];
+		for (let line of lines) {
+			line = line.trim();
+			if (line.startsWith("#")) continue;
+			const match = line.match(/^gem\s+["']([^"']+)["'](?:\s*,\s*["']([^"']+)["'])?/);
+			if (match && match[1]) {
+				const name = match[1];
+				const constraint = match[2] || ">= 0";
+				if (!constraints.some((c) => name in c)) {
+					constraints.push({ [name]: constraint });
 				}
 			}
 		}
