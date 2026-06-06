@@ -122,6 +122,17 @@ export function createCli(): Command {
 			"Never forget mode: Disallow forget events and error on chains with forget events",
 		);
 
+	program.hook("preAction", (thisCommand, actionCommand) => {
+		if (actionCommand.name() === "help") return;
+		try {
+			execSync("git rev-parse --is-inside-work-tree", { stdio: "ignore" });
+		} catch {
+			console.warn(
+				`⚠️  ${colors.yellow}${colors.bold}Warning:${colors.reset} pkablk is running outside of a Git repository or tracked directory. Some features (such as git-history replay or repository registration) may not work correctly.`,
+			);
+		}
+	});
+
 	function isStrictMode(options: any): boolean {
 		return !!(
 			options.strict ||

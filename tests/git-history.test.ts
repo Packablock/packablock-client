@@ -571,5 +571,31 @@ describe("Git History Replay Ingestion Tests", () => {
 			expect(compareOutput3).toContain("has no matching commit in git history");
 			expect(compareOutput3).toContain("has no matching block in the chain");
 		});
+
+		it("should print a warning if run outside of a Git repository", async () => {
+			const { spawnSync } = require("node:child_process");
+			const nonGitDir = path.resolve("/tmp/temp-non-git-dir");
+			rmSync(nonGitDir, { recursive: true, force: true });
+			await fs.mkdir(nonGitDir, { recursive: true });
+
+			const testChain = path.join(nonGitDir, "chain.yaml");
+			const genesisData = YAML.stringify({
+				"bun.lock": {
+					packages: [{ lodash: "4.17.21" }],
+				},
+			});
+			await initChain(testChain, genesisData);
+
+			const result = spawnSync(
+				"bun",
+				["run", cliPath, "status", "chain.yaml"],
+				{ cwd: nonGitDir },
+			);
+
+			const stderr = result.stderr.toString("utf8");
+			expect(stderr).toContain("pkablk is running outside of a Git repository");
+
+			rmSync(nonGitDir, { recursive: true, force: true });
+		});
 	});
 });
