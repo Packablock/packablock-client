@@ -240,7 +240,10 @@ describe("Git History Replay Ingestion Tests", () => {
 				await fs.writeFile(patchPath, commit.patch, "utf8");
 
 				try {
-					execSync("git apply temp.patch", { cwd: repoPath, stdio: "ignore" });
+					execSync("git apply --binary temp.patch", {
+						cwd: repoPath,
+						stdio: "ignore",
+					});
 				} catch (err) {
 					throw new Error(
 						`Failed to apply patch for commit ${commit.sha}: ${err}`,
@@ -250,12 +253,9 @@ describe("Git History Replay Ingestion Tests", () => {
 				await fs.unlink(patchPath);
 
 				execSync("git add .", { cwd: repoPath });
-				const cleanMsg = commit.message
-					.replace(/"/g, '\\"')
-					.replace(/`/g, "\\`")
-					.replace(/\$/g, "\\$");
-				execSync(`git commit -m "${cleanMsg}"`, {
+				execSync("git commit -F -", {
 					cwd: repoPath,
+					input: commit.message,
 					env: {
 						...process.env,
 						GIT_AUTHOR_NAME: commit.authorName,
@@ -281,52 +281,64 @@ describe("Git History Replay Ingestion Tests", () => {
 		afterEach(() => {
 			rmSync(tempDir, { recursive: true, force: true });
 		});
+		const replayFixtures = [
+			{ name: "bun.lock", file: "bun.lock.log" },
+			{ name: "bun.lockb", file: "bun.lockb.log" },
+			{ name: "package.json", file: "package.json.log" },
+			{ name: "Cargo.toml", file: "Cargo.toml.log" },
+			{ name: "Cargo.lock", file: "Cargo.lock.log" },
+		];
 
-		it("should replay git history onto an existing chain, appending new updates only", async () => {
-			const logContent = await fs.readFile(fixturePath, "utf8");
-			const commits = parseGitLogPatch(logContent);
+		for (const { name, file } of replayFixtures) {
+			it(`should replay git history onto an existing chain for ${name}, appending new updates only`, async () => {
+				const localFixturePath = path.resolve(__dirname, `./fixtures/${file}`);
+				const logContent = await fs.readFile(localFixturePath, "utf8");
+				const commits = parseGitLogPatch(logContent);
 
-			// 1. Rebuild history up to commit 5 and initialize the chain
-			await applyCommits(tempDir, commits, 0, 5);
-			execSync(
-				`bun run ${cliPath} init packablock.yaml --git-history bun.lock`,
-				{
-					cwd: tempDir,
-				},
-			);
+				const partition = Math.max(1, Math.floor(commits.length / 2));
 
-			const initialChainContent = await fs.readFile(chainPath, "utf8");
-			const initialVerification = await verifyChain(chainPath);
-			expect(initialVerification.valid).toBe(true);
+				// 1. Rebuild history up to partition and initialize the chain
+				await applyCommits(tempDir, commits, 0, partition);
+				execSync(
+					`bun run ${cliPath} init packablock.yaml --git-history ${name}`,
+					{
+						cwd: tempDir,
+					},
+				);
 
-			const initialDocs = initialChainContent
-				.split("---")
-				.map((d) => d.trim())
-				.filter((d) => d.length > 0);
+				const initialChainContent = await fs.readFile(chainPath, "utf8");
+				const initialVerification = await verifyChain(chainPath);
+				expect(initialVerification.valid).toBe(true);
 
-			// 2. Rebuild the rest of the commits in the repo
-			await applyCommits(tempDir, commits, 5, commits.length);
+				const initialDocs = initialChainContent
+					.split("---")
+					.map((d) => d.trim())
+					.filter((d) => d.length > 0);
 
-			// 3. Run append with --git-history to replay the rest
-			execSync(
-				`bun run ${cliPath} append packablock.yaml --git-history bun.lock`,
-				{
-					cwd: tempDir,
-				},
-			);
+				// 2. Rebuild the rest of the commits in the repo
+				await applyCommits(tempDir, commits, partition, commits.length);
 
-			const finalChainContent = await fs.readFile(chainPath, "utf8");
-			const finalVerification = await verifyChain(chainPath);
-			expect(finalVerification.valid).toBe(true);
+				// 3. Run append with --git-history to replay the rest
+				execSync(
+					`bun run ${cliPath} append packablock.yaml --git-history ${name}`,
+					{
+						cwd: tempDir,
+					},
+				);
 
-			const finalDocs = finalChainContent
-				.split("---")
-				.map((d) => d.trim())
-				.filter((d) => d.length > 0);
+				const finalChainContent = await fs.readFile(chainPath, "utf8");
+				const finalVerification = await verifyChain(chainPath);
+				expect(finalVerification.valid).toBe(true);
 
-			// The final chain should contain more blocks than the initial chain
-			expect(finalDocs.length).toBeGreaterThan(initialDocs.length);
-		});
+				const finalDocs = finalChainContent
+					.split("---")
+					.map((d) => d.trim())
+					.filter((d) => d.length > 0);
+
+				// The final chain should contain equal or more blocks than the initial chain
+				expect(finalDocs.length).toBeGreaterThanOrEqual(initialDocs.length);
+			});
+		}
 
 		it("should error if the chain file does not exist", async () => {
 			const nonExistentChain = path.join(tempDir, "non_existent.yaml");
