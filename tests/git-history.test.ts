@@ -1,10 +1,18 @@
-import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import {
+	afterAll,
+	beforeAll,
+	describe,
+	expect,
+	it,
+	beforeEach,
+	afterEach,
+} from "bun:test";
 import { execSync } from "node:child_process";
 import { existsSync, rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import YAML from "yaml";
-import { verifyChain } from "../src/chain.js";
+import { verifyChain, initChain } from "../src/chain.js";
 
 describe("Git History Replay Ingestion Tests", () => {
 	const tempDir = path.resolve(__dirname, "../temp-git-test");
@@ -142,5 +150,251 @@ describe("Git History Replay Ingestion Tests", () => {
 		expect(new Date(block1Meta.timestamp).toISOString()).toBe(
 			"2026-01-02T12:00:00.000Z",
 		);
+	});
+
+	describe("Ingestion and Error Handling on Existing Chains", () => {
+		const tempDir = path.resolve(__dirname, "../temp-git-test-replay");
+		const chainPath = path.join(tempDir, "packablock.yaml");
+		const cliPath = path.resolve(__dirname, "../index.ts");
+		const fixturePath = path.resolve(
+			__dirname,
+			"../../packablock-demo/tests/fixtures/bun.lock.log",
+		);
+
+		interface CommitPatch {
+			sha: string;
+			authorName: string;
+			authorEmail: string;
+			date: string;
+			message: string;
+			patch: string;
+		}
+
+		function parseGitLogPatch(content: string): CommitPatch[] {
+			const commits: CommitPatch[] = [];
+			const rawCommits = content.split(/\n(?=commit [0-9a-f]{40})/);
+
+			for (const raw of rawCommits) {
+				const lines = raw.split("\n");
+				const firstLine = lines[0];
+				if (!firstLine || !firstLine.startsWith("commit ")) continue;
+
+				const sha = firstLine.slice(7).trim();
+				let authorName = "Test Bot";
+				let authorEmail = "bot@test.com";
+				let date = "";
+				const messageLines: string[] = [];
+				const patchLines: string[] = [];
+				let inPatch = false;
+
+				for (let i = 1; i < lines.length; i++) {
+					const line = lines[i];
+					if (line === undefined) continue;
+
+					if (inPatch) {
+						patchLines.push(line);
+					} else if (line.startsWith("Author: ")) {
+						const match = line.slice(8).match(/^(.*?) <(.*?)>$/);
+						if (match && match[1] && match[2]) {
+							authorName = match[1];
+							authorEmail = match[2];
+						}
+					} else if (line.startsWith("Date: ")) {
+						date = line.slice(5).trim();
+					} else if (line.startsWith("diff --git ")) {
+						inPatch = true;
+						patchLines.push(line);
+					} else {
+						if (line.startsWith("    ")) {
+							messageLines.push(line.slice(4));
+						}
+					}
+				}
+
+				commits.push({
+					sha,
+					authorName,
+					authorEmail,
+					date,
+					message: messageLines.join("\n").trim(),
+					patch: patchLines.join("\n"),
+				});
+			}
+
+			return commits;
+		}
+
+		async function applyCommits(
+			repoPath: string,
+			commits: CommitPatch[],
+			start: number,
+			end: number,
+		) {
+			for (let i = start; i < end; i++) {
+				const commit = commits[i];
+				if (!commit) continue;
+
+				const patchPath = path.join(repoPath, "temp.patch");
+				await fs.writeFile(patchPath, commit.patch, "utf8");
+
+				try {
+					execSync("git apply temp.patch", { cwd: repoPath, stdio: "ignore" });
+				} catch (err) {
+					throw new Error(
+						`Failed to apply patch for commit ${commit.sha}: ${err}`,
+					);
+				}
+
+				await fs.unlink(patchPath);
+
+				execSync("git add .", { cwd: repoPath });
+				const cleanMsg = commit.message
+					.replace(/"/g, '\\"')
+					.replace(/`/g, "\\`")
+					.replace(/\$/g, "\\$");
+				execSync(`git commit -m "${cleanMsg}"`, {
+					cwd: repoPath,
+					env: {
+						...process.env,
+						GIT_AUTHOR_NAME: commit.authorName,
+						GIT_AUTHOR_EMAIL: commit.authorEmail,
+						GIT_AUTHOR_DATE: commit.date,
+						GIT_COMMITTER_NAME: commit.authorName,
+						GIT_COMMITTER_EMAIL: commit.authorEmail,
+						GIT_COMMITTER_DATE: commit.date,
+					},
+				});
+			}
+		}
+
+		beforeEach(async () => {
+			rmSync(tempDir, { recursive: true, force: true });
+			await fs.mkdir(tempDir, { recursive: true });
+
+			execSync("git init", { cwd: tempDir });
+			execSync("git config user.name 'Test Bot'", { cwd: tempDir });
+			execSync("git config user.email 'bot@test.com'", { cwd: tempDir });
+		});
+
+		afterEach(() => {
+			rmSync(tempDir, { recursive: true, force: true });
+		});
+
+		it("should replay git history onto an existing chain, appending new updates only", async () => {
+			const logContent = await fs.readFile(fixturePath, "utf8");
+			const commits = parseGitLogPatch(logContent);
+
+			// 1. Rebuild history up to commit 5 and initialize the chain
+			await applyCommits(tempDir, commits, 0, 5);
+			execSync(
+				`bun run ${cliPath} init packablock.yaml --git-history bun.lock`,
+				{
+					cwd: tempDir,
+				},
+			);
+
+			const initialChainContent = await fs.readFile(chainPath, "utf8");
+			const initialVerification = await verifyChain(chainPath);
+			expect(initialVerification.valid).toBe(true);
+
+			const initialDocs = initialChainContent
+				.split("---")
+				.map((d) => d.trim())
+				.filter((d) => d.length > 0);
+
+			// 2. Rebuild the rest of the commits in the repo
+			await applyCommits(tempDir, commits, 5, commits.length);
+
+			// 3. Run append with --git-history to replay the rest
+			execSync(
+				`bun run ${cliPath} append packablock.yaml --git-history bun.lock`,
+				{
+					cwd: tempDir,
+				},
+			);
+
+			const finalChainContent = await fs.readFile(chainPath, "utf8");
+			const finalVerification = await verifyChain(chainPath);
+			expect(finalVerification.valid).toBe(true);
+
+			const finalDocs = finalChainContent
+				.split("---")
+				.map((d) => d.trim())
+				.filter((d) => d.length > 0);
+
+			// The final chain should contain more blocks than the initial chain
+			expect(finalDocs.length).toBeGreaterThan(initialDocs.length);
+		});
+
+		it("should error if the chain file does not exist", async () => {
+			const nonExistentChain = path.join(tempDir, "non_existent.yaml");
+			try {
+				execSync(
+					`bun run ${cliPath} append ${nonExistentChain} --git-history bun.lock`,
+					{ cwd: tempDir, stdio: "pipe" },
+				);
+				expect(true).toBe(false);
+			} catch (err: any) {
+				expect(err.message).toContain("File not found");
+			}
+		});
+
+		it("should error if the lockfile has not been initialized in the chain yet", async () => {
+			// Initialize chain with a different lockfile name
+			const genesisData = YAML.stringify({
+				"package-lock.json": {
+					packages: [{ lodash: "4.17.21" }],
+				},
+			});
+			await initChain(chainPath, genesisData);
+
+			// Rebuild some history for bun.lock in repo
+			const logContent = await fs.readFile(fixturePath, "utf8");
+			const commits = parseGitLogPatch(logContent);
+			await applyCommits(tempDir, commits, 0, 2);
+
+			// Try to append --git-history for bun.lock (which is not tracked)
+			try {
+				execSync(
+					`bun run ${cliPath} append packablock.yaml --git-history bun.lock`,
+					{ cwd: tempDir, stdio: "pipe" },
+				);
+				expect(true).toBe(false);
+			} catch (err: any) {
+				expect(err.message).toContain("is not tracked in this chain");
+			}
+		});
+
+		it("should error if the lockfile has been forgotten and --never-forget is enabled", async () => {
+			// Initialize chain with bun.lock
+			const genesisData = YAML.stringify({
+				"bun.lock": {
+					packages: [{ lodash: "4.17.21" }],
+				},
+			});
+			await initChain(chainPath, genesisData);
+
+			// Rebuild some history for bun.lock in repo
+			const logContent = await fs.readFile(fixturePath, "utf8");
+			const commits = parseGitLogPatch(logContent);
+			await applyCommits(tempDir, commits, 0, 2);
+
+			// Forget bun.lock in the chain
+			execSync(`bun run ${cliPath} forget packablock.yaml -l bun.lock`, {
+				cwd: tempDir,
+			});
+
+			// Trying to replay/append bun.lock with --never-forget should error
+			try {
+				execSync(
+					`bun run ${cliPath} append packablock.yaml --git-history bun.lock --never-forget`,
+					{ cwd: tempDir, stdio: "pipe" },
+				);
+				expect(true).toBe(false);
+			} catch (err: any) {
+				expect(err.message).toContain("Strict policy violation");
+				expect(err.message).toContain("contains forget events");
+			}
+		});
 	});
 });

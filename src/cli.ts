@@ -548,10 +548,277 @@ export function createCli(): Command {
 			"-l, --lockfile <lockfiles...>",
 			"One or more lockfiles to parse and append packages",
 		)
+		.option(
+			"-g, --git-history <lockfile-path>",
+			"Replay git history of the specified lockfile and append changes to the chain",
+		)
 		.description("Append a new dependency block to the package log")
 		.action(async (file, options) => {
 			await checkNeverForget(file, options);
 			const resolvedPath = path.resolve(file);
+
+			// Check if chain file exists first
+			let fileExists = false;
+			try {
+				await fs.stat(resolvedPath);
+				fileExists = true;
+			} catch {}
+
+			if (!fileExists) {
+				console.error(
+					`${colors.red}${colors.bold}Error: ${colors.reset}File not found: ${resolvedPath}. Run init first.`,
+				);
+				process.exit(1);
+			}
+
+			if (options.gitHistory) {
+				const lockfilePath = options.gitHistory;
+				const lockfileBasename = path.basename(lockfilePath);
+
+				if (
+					options.data ||
+					options.file ||
+					(options.lockfile && options.lockfile.length > 0)
+				) {
+					console.error(
+						`${colors.red}${colors.bold}Error: ${colors.reset}Cannot specify --git-history along with --data, --file, or --lockfile options.`,
+					);
+					process.exit(1);
+				}
+
+				console.log(
+					`📜 ${colors.bold}Replaying git history for lockfile:${colors.reset} ${lockfilePath}`,
+				);
+
+				try {
+					// Check if file is tracked/inited
+					const isTracked = await hasLockfileInChain(
+						resolvedPath,
+						lockfileBasename,
+					);
+					if (!isTracked) {
+						const forgetBlock = await findLockfileForgetBlock(
+							resolvedPath,
+							lockfileBasename,
+						);
+						if (forgetBlock !== null) {
+							if (isStrictMode(options) || isNeverForgetMode(options)) {
+								throw new Error(
+									`Lockfile '${lockfileBasename}' was forgotten in Block ${forgetBlock} and cannot be appended to.`,
+								);
+							}
+							console.warn(
+								`⚠️  ${colors.yellow}${colors.bold}Warning:${colors.reset} Lockfile '${lockfileBasename}' was forgotten in Block ${forgetBlock}. Accepting the append.`,
+							);
+						} else {
+							throw new Error(
+								`Lockfile '${lockfileBasename}' is not tracked in this chain. New lockfiles can only be introduced when initializing the chain (using 'pkablk init').`,
+							);
+						}
+					} else {
+						if (isNeverForgetMode(options)) {
+							const hasForget = await hasForgetEvents(resolvedPath);
+							if (hasForget) {
+								throw new Error(
+									`Lockfile '${lockfileBasename}' cannot be appended to because the chain contains forget events under never-forget mode.`,
+								);
+							}
+						}
+					}
+
+					// Find the timestamp of the latest block in the chain that has changes for this lockfile.
+					let latestCommitTime: Date | null = null;
+					const fileContent = await fs.readFile(resolvedPath, "utf8");
+					const docs = splitRawDocuments(fileContent);
+
+					for (let i = 0; i < docs.length; i += 2) {
+						const dataDocStr = docs[i];
+						if (!dataDocStr) continue;
+
+						try {
+							const preprocessed = dataDocStr.replace(
+								/^(\s*)(@[^:]+):/gm,
+								'$1"$2":',
+							);
+							const parsed = YAML.parse(preprocessed);
+							let hasUpdates = false;
+
+							if (parsed && typeof parsed === "object") {
+								if (parsed.lockfiles && typeof parsed.lockfiles === "object") {
+									if (lockfileBasename in parsed.lockfiles) {
+										hasUpdates = true;
+									}
+								} else if (lockfileBasename in parsed) {
+									hasUpdates = true;
+								}
+							}
+
+							if (hasUpdates) {
+								const metaDocStr = docs[i + 1];
+								if (metaDocStr) {
+									const metaParsed = YAML.parse(metaDocStr);
+									const meta = metaParsed?.["$yaml-chain-meta"];
+									if (meta?.timestamp) {
+										latestCommitTime = new Date(meta.timestamp);
+									}
+								}
+							}
+						} catch {}
+					}
+
+					// Get latest packages for this lockfile from the chain
+					let lastPackages = await getLatestPackagesForFile(
+						resolvedPath,
+						lockfileBasename,
+					);
+					let lastPackagesStr = YAML.stringify(lastPackages).trim();
+
+					// 1. Verify git and get log
+					const gitLogCmd = `git log --follow --reverse --format="%H|%aN|%aE|%aI|%s" -- ${lockfilePath}`;
+					const logStdout = execSync(gitLogCmd, { encoding: "utf8" });
+					const lines = logStdout
+						.split("\n")
+						.filter((l) => l.trim().length > 0);
+
+					if (lines.length === 0) {
+						throw new Error(`No git history found for file: ${lockfilePath}`);
+					}
+
+					console.log(
+						`Found ${lines.length} commits modifying ${lockfilePath}. Processing...`,
+					);
+
+					let blockCount = 0;
+
+					for (const line of lines) {
+						const parts = line.split("|");
+						const sha = parts[0];
+						const name = parts[1];
+						const email = parts[2];
+						const date = parts[3];
+						const message = parts.slice(4).join("|");
+
+						if (!sha || !date) continue;
+
+						// Skip commits that are older than or equal to the latest block timestamp for this lockfile
+						if (latestCommitTime && new Date(date) <= latestCommitTime) {
+							continue;
+						}
+
+						// 2. Fetch lockfile content at this commit
+						const showCmd = `git show ${sha}:${lockfilePath}`;
+						let content = "";
+						try {
+							content = execSync(showCmd, {
+								encoding: "utf8",
+								stdio: ["pipe", "pipe", "ignore"],
+							});
+						} catch {
+							continue;
+						}
+
+						// 3. Parse content
+						let parsedPackages: Record<string, string> = {};
+						try {
+							parsedPackages = parseSingleLockfileContent(
+								lockfileBasename,
+								content,
+							);
+						} catch (err: any) {
+							console.log(
+								`${colors.yellow}⚠️  Skipping commit ${sha.slice(0, 7)}: unable to parse lockfile (${err.message})${colors.reset}`,
+							);
+							continue;
+						}
+
+						const rawPackages = parsedPackages;
+						const packagesYaml = YAML.stringify(rawPackages).trim();
+
+						// 4. Only append if packages map changed
+						if (packagesYaml === lastPackagesStr) {
+							continue;
+						}
+
+						lastPackagesStr = packagesYaml;
+
+						// 5. Construct payload & Write block
+						const customMeta = {
+							timestamp: date,
+						};
+
+						let constraints: any = null;
+						try {
+							const pkgDir = path.dirname(lockfilePath);
+							const pkgShowCmd = `git show ${sha}:${path.join(pkgDir, "package.json")}`;
+							const pkgContent = execSync(pkgShowCmd, {
+								encoding: "utf8",
+								stdio: ["pipe", "pipe", "ignore"],
+							});
+							const pkg = JSON.parse(pkgContent);
+							const tempConstraints: any[] = [];
+							const depKeys = [
+								"dependencies",
+								"devDependencies",
+								"peerDependencies",
+							];
+							for (const key of depKeys) {
+								if (pkg[key] && typeof pkg[key] === "object") {
+									for (const [name, constraint] of Object.entries(pkg[key])) {
+										if (
+											typeof constraint === "string" &&
+											!tempConstraints.some((c) => name in c)
+										) {
+											tempConstraints.push({ [name]: constraint });
+										}
+									}
+								}
+							}
+							if (tempConstraints.length > 0) {
+								constraints = tempConstraints;
+							}
+						} catch {}
+
+						const locations: Record<string, { line: number; column: number }> =
+							{};
+						for (const name of Object.keys(rawPackages)) {
+							locations[name] = locatePackageInFile(content, name);
+						}
+						const diff = getPackageDiff(lastPackages, rawPackages, locations);
+
+						// Skip if diff has no changes
+						if (diff.length === 0) {
+							continue;
+						}
+
+						const payloadObj: any = {
+							lockfiles: {
+								[lockfileBasename]: {
+									packages: diff,
+								},
+							},
+						};
+						if (constraints) {
+							payloadObj["package.json"] = { constraints };
+						}
+						const blockData = YAML.stringify(payloadObj);
+						await appendBlock(resolvedPath, blockData, customMeta);
+
+						lastPackages = rawPackages;
+						blockCount++;
+					}
+
+					console.log(
+						`\n✨ ${colors.green}${colors.bold}Success:${colors.reset} Replayed git history onto Packablock log at ${colors.bold}${file}${colors.reset} with ${blockCount} replayed dependency update blocks.`,
+					);
+					return;
+				} catch (err: any) {
+					console.error(
+						`\n❌ ${colors.red}${colors.bold}Error replaying history:${colors.reset} ${err.message}`,
+					);
+					process.exit(1);
+				}
+			}
+
 			let data = "";
 
 			if (options.lockfile && options.lockfile.length > 0) {
