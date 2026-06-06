@@ -12,7 +12,11 @@ import { existsSync, rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import YAML from "yaml";
-import { verifyChain, initChain } from "../src/chain.js";
+import {
+	verifyChain,
+	initChain,
+	findLockfileForgetBlock,
+} from "../src/chain.js";
 
 describe("Git History Replay Ingestion Tests", () => {
 	const tempDir = path.resolve(__dirname, "../temp-git-test");
@@ -395,6 +399,52 @@ describe("Git History Replay Ingestion Tests", () => {
 				expect(err.message).toContain("Strict policy violation");
 				expect(err.message).toContain("contains forget events");
 			}
+		});
+
+		it("should automatically forget a lockfile if it is deleted in the git history", async () => {
+			const logContent = await fs.readFile(fixturePath, "utf8");
+			const commits = parseGitLogPatch(logContent);
+
+			// Rebuild all commits
+			await applyCommits(tempDir, commits, 0, commits.length);
+
+			// Add a commit that deletes bun.lock
+			execSync("git rm bun.lock", { cwd: tempDir });
+			execSync("git commit -m 'meta: delete bun.lock'", {
+				cwd: tempDir,
+				env: {
+					...process.env,
+					GIT_AUTHOR_NAME: "Test Bot",
+					GIT_AUTHOR_EMAIL: "bot@test.com",
+					GIT_AUTHOR_DATE: "2026-06-06T12:00:00Z",
+					GIT_COMMITTER_NAME: "Test Bot",
+					GIT_COMMITTER_EMAIL: "bot@test.com",
+					GIT_COMMITTER_DATE: "2026-06-06T12:00:00Z",
+				},
+			});
+
+			// Run init with --git-history option for bun.lock
+			execSync(
+				`bun run ${cliPath} init packablock.yaml --git-history bun.lock`,
+				{
+					cwd: tempDir,
+				},
+			);
+
+			// Verify chain exists
+			expect(existsSync(chainPath)).toBe(true);
+
+			// Read and verify the chain
+			const verification = await verifyChain(chainPath);
+			expect(verification.valid).toBe(true);
+
+			// Find the forget block
+			const forgetBlockIndex = await findLockfileForgetBlock(
+				chainPath,
+				"bun.lock",
+			);
+			expect(forgetBlockIndex).not.toBeNull();
+			expect(forgetBlockIndex).toBeGreaterThan(0);
 		});
 	});
 });

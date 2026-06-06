@@ -273,6 +273,36 @@ export function createCli(): Command {
 
 						if (!sha || !date) continue;
 
+						// Check if the file is deleted in this commit
+						const statusCmd = `git diff-tree --no-commit-id --name-status -r ${sha} -- ${lockfilePath}`;
+						let isDeletion = false;
+						try {
+							const statusOutput = execSync(statusCmd, {
+								encoding: "utf8",
+							}).trim();
+							isDeletion = statusOutput.startsWith("D");
+						} catch {}
+
+						if (isDeletion) {
+							const payloadObj: any = {
+								lockfiles: {
+									[lockfileBasename]: {
+										chain_event: "forget",
+									},
+								},
+							};
+							const blockData = YAML.stringify(payloadObj);
+							if (blockCount === 0) {
+								await initChain(resolvedPath, blockData, GENESIS_PREV_HASH, {
+									timestamp: date,
+								});
+							} else {
+								await appendBlock(resolvedPath, blockData, { timestamp: date });
+							}
+							blockCount++;
+							break; // Stop replaying since file was deleted
+						}
+
 						// 2. Fetch lockfile content at this commit
 						const showCmd = `git show ${sha}:${lockfilePath}`;
 						let content = "";
@@ -703,6 +733,30 @@ export function createCli(): Command {
 						// Skip commits that are older than or equal to the latest block timestamp for this lockfile
 						if (latestCommitTime && new Date(date) <= latestCommitTime) {
 							continue;
+						}
+
+						// Check if the file is deleted in this commit
+						const statusCmd = `git diff-tree --no-commit-id --name-status -r ${sha} -- ${lockfilePath}`;
+						let isDeletion = false;
+						try {
+							const statusOutput = execSync(statusCmd, {
+								encoding: "utf8",
+							}).trim();
+							isDeletion = statusOutput.startsWith("D");
+						} catch {}
+
+						if (isDeletion) {
+							const payloadObj: any = {
+								lockfiles: {
+									[lockfileBasename]: {
+										chain_event: "forget",
+									},
+								},
+							};
+							const blockData = YAML.stringify(payloadObj);
+							await appendBlock(resolvedPath, blockData, { timestamp: date });
+							blockCount++;
+							break; // Stop replaying since file was deleted
 						}
 
 						// 2. Fetch lockfile content at this commit
