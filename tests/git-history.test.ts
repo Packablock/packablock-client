@@ -446,5 +446,41 @@ describe("Git History Replay Ingestion Tests", () => {
 			expect(forgetBlockIndex).not.toBeNull();
 			expect(forgetBlockIndex).toBeGreaterThan(0);
 		});
+
+		it("should error if a lockfile is deleted in the git history and --never-forget is enabled", async () => {
+			const logContent = await fs.readFile(fixturePath, "utf8");
+			const commits = parseGitLogPatch(logContent);
+
+			// Rebuild all commits
+			await applyCommits(tempDir, commits, 0, commits.length);
+
+			// Add a commit that deletes bun.lock
+			execSync("git rm bun.lock", { cwd: tempDir });
+			execSync("git commit -m 'meta: delete bun.lock'", {
+				cwd: tempDir,
+				env: {
+					...process.env,
+					GIT_AUTHOR_NAME: "Test Bot",
+					GIT_AUTHOR_EMAIL: "bot@test.com",
+					GIT_AUTHOR_DATE: "2026-06-06T12:00:00Z",
+					GIT_COMMITTER_NAME: "Test Bot",
+					GIT_COMMITTER_EMAIL: "bot@test.com",
+					GIT_COMMITTER_DATE: "2026-06-06T12:00:00Z",
+				},
+			});
+
+			// Trying to init with --git-history and --never-forget should throw an error
+			try {
+				execSync(
+					`bun run ${cliPath} init packablock.yaml --git-history bun.lock --never-forget`,
+					{ cwd: tempDir, stdio: "pipe" },
+				);
+				expect(true).toBe(false);
+			} catch (err: any) {
+				expect(err.message).toContain(
+					"cannot be forgotten under never-forget rules",
+				);
+			}
+		});
 	});
 });

@@ -284,6 +284,11 @@ export function createCli(): Command {
 						} catch {}
 
 						if (isDeletion) {
+							if (isNeverForgetMode(options)) {
+								throw new Error(
+									`Lockfile '${lockfileBasename}' was deleted in commit ${sha.slice(0, 7)} and cannot be forgotten under never-forget rules.`,
+								);
+							}
 							const payloadObj: any = {
 								lockfiles: {
 									[lockfileBasename]: {
@@ -746,6 +751,11 @@ export function createCli(): Command {
 						} catch {}
 
 						if (isDeletion) {
+							if (isNeverForgetMode(options)) {
+								throw new Error(
+									`Lockfile '${lockfileBasename}' was deleted in commit ${sha.slice(0, 7)} and cannot be forgotten under never-forget rules.`,
+								);
+							}
 							const payloadObj: any = {
 								lockfiles: {
 									[lockfileBasename]: {
