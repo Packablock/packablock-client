@@ -428,7 +428,9 @@ export function readGemfileConstraints(
 		for (let line of lines) {
 			line = line.trim();
 			if (line.startsWith("#")) continue;
-			const match = line.match(/^gem\s+["']([^"']+)["'](?:\s*,\s*["']([^"']+)["'])?/);
+			const match = line.match(
+				/^gem\s+["']([^"']+)["'](?:\s*,\s*["']([^"']+)["'])?/,
+			);
 			if (match && match[1]) {
 				const name = match[1];
 				const constraint = match[2] || ">= 0";
