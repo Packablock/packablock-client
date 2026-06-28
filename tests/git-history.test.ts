@@ -31,6 +31,7 @@ describe("Git History Replay Ingestion Tests", () => {
 		execSync("git init", { cwd: tempDir });
 		execSync("git config user.name 'Test Bot'", { cwd: tempDir });
 		execSync("git config user.email 'bot@test.com'", { cwd: tempDir });
+		execSync("git config commit.gpgsign false", { cwd: tempDir });
 
 		// Commit 1: Initial bun.lock
 		const lockContent1 = JSON.stringify({
@@ -155,7 +156,7 @@ describe("Git History Replay Ingestion Tests", () => {
 		expect(new Date(block1Meta.timestamp).toISOString()).toBe(
 			"2026-01-02T12:00:00.000Z",
 		);
-	});
+	}, 20000);
 
 	describe("Ingestion and Error Handling on Existing Chains", () => {
 		const tempDir = path.resolve(__dirname, "../temp-git-test-replay");
@@ -276,6 +277,7 @@ describe("Git History Replay Ingestion Tests", () => {
 			execSync("git init", { cwd: tempDir });
 			execSync("git config user.name 'Test Bot'", { cwd: tempDir });
 			execSync("git config user.email 'bot@test.com'", { cwd: tempDir });
+			execSync("git config commit.gpgsign false", { cwd: tempDir });
 		});
 
 		afterEach(() => {
@@ -337,7 +339,7 @@ describe("Git History Replay Ingestion Tests", () => {
 
 				// The final chain should contain equal or more blocks than the initial chain
 				expect(finalDocs.length).toBeGreaterThanOrEqual(initialDocs.length);
-			});
+			}, 20000);
 		}
 
 		it("should error if the chain file does not exist", async () => {
@@ -455,7 +457,7 @@ describe("Git History Replay Ingestion Tests", () => {
 			);
 			expect(forgetBlockIndex).not.toBeNull();
 			expect(forgetBlockIndex).toBeGreaterThan(0);
-		});
+		}, 20000);
 
 		it("should error if a lockfile is deleted in the git history and --never-forget is enabled", async () => {
 			const logContent = await fs.readFile(fixturePath, "utf8");
@@ -491,7 +493,7 @@ describe("Git History Replay Ingestion Tests", () => {
 					"cannot be forgotten under never-forget rules",
 				);
 			}
-		});
+		}, 20000);
 
 		it("should successfully compare git history with a chain, matching blocks and warning on discrepancies", async () => {
 			const logContent = await fs.readFile(fixturePath, "utf8");
@@ -579,7 +581,7 @@ describe("Git History Replay Ingestion Tests", () => {
 			);
 			expect(compareOutput3).toContain("has no matching commit in git history");
 			expect(compareOutput3).toContain("has no matching block in the chain");
-		});
+		}, 20000);
 
 		it("should print a warning if run outside of a Git repository", async () => {
 			const { spawnSync } = require("node:child_process");

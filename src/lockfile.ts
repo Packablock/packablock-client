@@ -149,7 +149,7 @@ export function parseLockfiles(filepaths: string[]): LockfileData {
 				const content = readFileSync(absolutePath, "utf8");
 				fileContentForLocation = content;
 				try {
-					const data = Bun.TOML.parse(content);
+					const data = Bun.TOML.parse(content) as any;
 					if (data && Array.isArray(data.package)) {
 						const pkgs: Record<string, string> = {};
 						for (const pkg of data.package) {
@@ -237,7 +237,7 @@ export function parseSingleLockfileContent(
 ): Record<string, string> {
 	if (filename === "Cargo.lock") {
 		try {
-			const data = Bun.TOML.parse(content);
+			const data = Bun.TOML.parse(content) as any;
 			if (data && Array.isArray(data.package)) {
 				const packages: Record<string, string> = {};
 				for (const pkg of data.package) {
@@ -361,7 +361,7 @@ export function readCargoTomlConstraints(
 	}
 	try {
 		const content = readFileSync(tomlPath, "utf8");
-		const data = Bun.TOML.parse(content);
+		const data = Bun.TOML.parse(content) as any;
 		const constraints: Array<Record<string, string>> = [];
 		const depKeys = ["dependencies", "dev-dependencies", "build-dependencies"];
 		for (const key of depKeys) {
