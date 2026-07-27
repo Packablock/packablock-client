@@ -1,6 +1,6 @@
 # packablock-client
 
-A Bun + TypeScript CLI for managing cryptographically secured parallel package history chains.
+A Bun + TypeScript CLI client for Zero-Trust Supply Chain Policy Control.
 
 <img width="128" height="128" alt="packablock-cli-avatar-512" src="https://github.com/user-attachments/assets/7ad8650a-d216-4cac-b211-759aa60d1a40" />
 
